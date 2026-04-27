@@ -1,4 +1,4 @@
-# shmerm
+# shmerminal
 
 **Durable Tool Execution CLI.**
 *The Shtateful Agentic Tool Machine.*
