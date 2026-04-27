@@ -1,0 +1,53 @@
+{
+  "name": "shmerm",
+  "version": "0.0.1",
+  "description": "Durable Tool Execution CLI. The Shtateful Agentic Tool Machine.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "shmerm": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "skill"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/shmerm.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "agent",
+    "cli",
+    "durable-execution",
+    "pty",
+    "terminal",
+    "tunnel",
+    "openclaw",
+    "claude-code",
+    "agentic"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thedotmack/shmerm"
+  }
+}
