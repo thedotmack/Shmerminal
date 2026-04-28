@@ -11,6 +11,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import corpus as corpus_module
 import dispatcher
 import ollama_client
 import prompts
@@ -22,6 +23,9 @@ LOG_DIR = pathlib.Path(os.path.expanduser("~/.shvix/logs"))
 VERSION = "0.1.0"
 START_TIME = time.time()
 
+# Load corpus once at module import. None means cold mode — daemon must still serve.
+corpus: corpus_module.Corpus | None = corpus_module.Corpus.load()
+
 
 def log_request(endpoint: str, payload: dict) -> None:
     today = time.strftime("%Y-%m-%d")
@@ -29,20 +33,25 @@ def log_request(endpoint: str, payload: dict) -> None:
     (LOG_DIR / f"{today}.jsonl").open("a").write(line + "\n")
 
 
-def _classify(symptom: str, candidates: list[str]) -> tuple[str, float, str]:
-    """Returns (classification, confidence, raw_response)."""
-    prompt = prompts.build_classify_prompt(symptom, candidates)
+def _classify(symptom: str, candidates: list[str]) -> tuple[str, float, str, list[str]]:
+    """Returns (classification, confidence, raw_response, corpus_hit_ids)."""
+    hits: list[dict] = []
+    hit_ids: list[str] = []
+    if corpus is not None:
+        hits = corpus.search(symptom, k=5)
+        hit_ids = [h.get("id") for h in hits if h.get("id") is not None]
+    prompt = prompts.build_classify_prompt(symptom, candidates, corpus_hits=hits)
     raw = ollama_client.generate(OLLAMA_URL, MODEL, prompt)
     norm = raw.strip().lower()
     # Exact match first
     for c in candidates:
         if norm == c.lower():
-            return c, 1.0, raw
+            return c, 1.0, raw, hit_ids
     # Prefix match (e.g. "frozen-pty\n" or "frozen-pty.")
     for c in candidates:
         if norm.startswith(c.lower()):
-            return c, 0.7, raw
-    return "unknown", 0.0, raw
+            return c, 0.7, raw, hit_ids
+    return "unknown", 0.0, raw, hit_ids
 
 
 def _handle_fix(body: dict | None) -> tuple[int, dict, dict]:
@@ -62,11 +71,11 @@ def _handle_fix(body: dict | None) -> tuple[int, dict, dict]:
     def _ms() -> int:
         return int((time.time() - t0) * 1000)
     try:
-        classification, _confidence, _raw = _classify(symptom, dispatcher.candidates())
+        classification, _confidence, _raw, hit_ids = _classify(symptom, dispatcher.candidates())
     except ollama_client.OllamaUnreachable as e:
         return 503, {"error": "ollama_unreachable", "detail": str(e)}, {
             "ok": False, "error": "ollama_unreachable",
-            "symptom": symptom, "latency_ms": _ms(),
+            "symptom": symptom, "latency_ms": _ms(), "corpus_hits": [],
         }
 
     if classification == "unknown":
@@ -74,7 +83,8 @@ def _handle_fix(body: dict | None) -> tuple[int, dict, dict]:
                 "details": {}, "requires_human": True,
                 "message": "human intervention requested", "latency_ms": _ms()}
         log = {"ok": False, "classification": "unknown", "action_taken": "noop",
-               "symptom": symptom, "latency_ms": resp["latency_ms"], "requires_human": True}
+               "symptom": symptom, "latency_ms": resp["latency_ms"],
+               "requires_human": True, "corpus_hits": hit_ids}
         return 200, resp, log
 
     try:
@@ -87,13 +97,15 @@ def _handle_fix(body: dict | None) -> tuple[int, dict, dict]:
                 "latency_ms": _ms()}
         log = {"ok": False, "error": "runbook_exception",
                "classification": classification, "action_taken": "runbook_error",
-               "symptom": symptom, "latency_ms": resp["latency_ms"], "requires_human": True}
+               "symptom": symptom, "latency_ms": resp["latency_ms"],
+               "requires_human": True, "corpus_hits": hit_ids}
         return 200, resp, log
 
     resp = {"classification": classification, **result, "latency_ms": _ms()}
     log = {"ok": result["ok"], "classification": classification,
            "action_taken": result["action_taken"], "symptom": symptom,
-           "latency_ms": resp["latency_ms"], "requires_human": result["requires_human"]}
+           "latency_ms": resp["latency_ms"],
+           "requires_human": result["requires_human"], "corpus_hits": hit_ids}
     return 200, resp, log
 
 
@@ -166,13 +178,14 @@ class Handler(BaseHTTPRequestHandler):
             log_request("/classify", {"ok": False, "error": "missing_fields"})
             return
         try:
-            classification, confidence, raw = _classify(symptom, candidates)
+            classification, confidence, raw, hit_ids = _classify(symptom, candidates)
         except ollama_client.OllamaUnreachable as e:
             self._send_json(503, {"error": "ollama_unreachable", "detail": str(e)})
             log_request("/classify", {
                 "ok": False, "error": "ollama_unreachable",
                 "symptom": symptom,
                 "latency_ms": int((time.time() - t0) * 1000),
+                "corpus_hits": [],
             })
             return
         latency_ms = int((time.time() - t0) * 1000)
@@ -186,6 +199,7 @@ class Handler(BaseHTTPRequestHandler):
             "symptom": symptom,
             "classification": classification,
             "latency_ms": latency_ms,
+            "corpus_hits": hit_ids,
         })
 
 
@@ -206,8 +220,12 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    corpus_suffix = (
+        f", corpus={corpus.size} obs" if corpus is not None
+        else ", corpus=none (running cold)"
+    )
     print(
-        f"shvix daemon listening on :{PORT}, ollama=ok, model={MODEL} pulled",
+        f"shvix daemon listening on :{PORT}, ollama=ok, model={MODEL} pulled{corpus_suffix}",
         file=sys.stderr,
     )
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
