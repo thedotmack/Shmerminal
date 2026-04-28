@@ -1,0 +1,20 @@
+{
+  "name": "shvix",
+  "version": "0.1.0",
+  "description": "Local MLX recovery agent for shmerminal/openclaw — offline, Apple Silicon",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "shvix": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
