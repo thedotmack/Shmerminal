@@ -1,0 +1,11 @@
+{
+  "name": "shvix",
+  "version": "0.1.0",
+  "description": "Diagnose and recover wedged shmerminal/openclaw sessions via the local shvix daemon.",
+  "author": {
+    "name": "shvix",
+    "url": "https://github.com/thedotmack/shmerminal"
+  },
+  "homepage": "https://github.com/thedotmack/shmerminal",
+  "license": "MIT"
+}
