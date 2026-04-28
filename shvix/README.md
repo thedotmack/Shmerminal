@@ -8,7 +8,7 @@
 
 ---
 
-shvix is a tiny local agent that fixes things when they bork. It runs an MLX model on your Mac, scoped to a corpus you give it, with a narrow set of tools it's allowed to use. v1 ships with one corpus: OpenClaw recovery. When OpenClaw wedges itself, you type `/shvix` and shvix gets it back online — without ever touching the network.
+shvix is a tiny local agent that fixes things when they bork. It runs a small open-weight model via [Ollama](https://ollama.com) on your laptop — Mac, Linux, or Windows — scoped to a corpus you give it, with a narrow set of tools it's allowed to use. v1 ships with one corpus: OpenClaw recovery. When OpenClaw wedges itself, you type `/shvix` and shvix gets it back online — without ever touching the network.
 
 ```bash
 # from inside OpenClaw, when something's wrong:
@@ -32,7 +32,7 @@ Three concrete problems it ends:
 
 **Recovery agents that die with their patient.** A repair tool inside the broken thing isn't a repair tool. shvix runs as its own daemon. OpenClaw can crash, restart, segfault, hang — shvix is unaffected.
 
-**"It's a small fix but I'm offline."** MLX runs Qwen2.5-Coder-class models on Apple Silicon at usable speeds, with no network. Plane, train, café wifi captive portal, rate limit, outage — shvix works.
+**"It's a small fix but I'm offline."** Ollama runs Gemma 4 at usable speeds on any modern laptop with no network. Plane, train, café wifi captive portal, rate limit, outage — shvix works.
 
 **Fixes you've made before, made again from scratch.** Every shvix recovery feeds back into the corpus. Same bork next month? shvix already knows the runbook.
 
@@ -42,17 +42,17 @@ Three concrete problems it ends:
 
 shvix is three things wired together:
 
-1. **A local MLX model.** Small (7B–14B class), loaded once, kept warm. Its job is classification, not creativity.
+1. **A local model via Ollama.** `gemma4:e4b` by default — 4B-effective Gemma 4 Instruct, ~9.6 GB on disk, kept warm. Its job is classification, not creativity. Swap with `SHVIX_MODEL` if you'd rather run something else.
 2. **A corpus.** A claude-mem knowledge brain scoped to the failure domain. For v1 that's OpenClaw recovery — every observation across every session that solved an OpenClaw bork.
 3. **A narrow tool surface.** Deterministic Python that does the actual work: read logs, kill PIDs, restore session state from `~/.shmerminal/sessions/<id>/`, restart processes, clear stale sockets, diff against last-known-good config.
 
-The split matters. The model picks the runbook. Python executes it. A 7B model classifying into 8 known failure modes is reliable. A 7B model freely calling `rm -rf` is a liability.
+The split matters. The model picks the runbook. Python executes it. A 4B model classifying into a handful of known failure modes is reliable. A 4B model freely calling `rm -rf` is a liability.
 
 ---
 
 ## What you get
 
-**A daemon.** Runs on a unix socket at `~/.shvix/shvix.sock`. Loads the model once. Stays warm. Idle CPU is near zero.
+**A daemon.** A small Python HTTP server on `localhost:7749`. Sits in front of Ollama, adds prompt templating, RAG over the corpus, and runbook dispatch. Idle CPU is near zero — Ollama keeps the model warm.
 
 **A slash command.** `/shvix <symptom>` from inside OpenClaw POSTs the symptom plus recent logs to the daemon and waits for the verdict.
 
@@ -85,24 +85,30 @@ All commands accept `--json`. The daemon also speaks HTTP on `localhost` for the
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  ~/.shvix/                                               │
-│    shvix.sock         control plane                      │
-│    model/             MLX weights (downloaded once)      │
-│    corpora/openclaw/  claude-mem brain for the domain    │
-│    history.jsonl      every recovery, classified + outcome│
+│    daemon.pid         pid of running shvix daemon         │
+│    corpora/openclaw   claude-mem brain for the domain     │
+│    logs/*.jsonl       every recovery, classified + outcome│
 └──────────────────────────────────────────────────────────┘
          ▲                ▲                  ▲
          │                │                  │
    ┌─────┴──────┐   ┌─────┴──────┐    ┌──────┴───────┐
    │ shvix      │   │ /shvix     │    │ shvix CLI    │
    │ daemon     │   │ slash cmd  │    │ (recover,    │
-   │ • MLX      │   │ (inside    │    │  diagnose,   │
+   │ :7749      │   │ (inside    │    │  diagnose,   │
    │ • corpus   │   │  OpenClaw) │    │  corpus,     │
    │ • tools    │   └────────────┘    │  logs)       │
    │ • runbooks │                     └──────────────┘
-   └────────────┘
+   └─────┬──────┘
+         │ HTTP
+         ▼
+   ┌────────────────────────────┐
+   │ Ollama @ :11434            │
+   │ gemma4:e4b — kept warm     │
+   │ (~/.ollama/models/)        │
+   └────────────────────────────┘
 ```
 
-One daemon per machine. Per-corpus brains. Recovery actions are deterministic Python, not free-form tool calls — the model picks which one to run, not how to run it.
+One shvix daemon per machine, sitting in front of one Ollama instance. Per-corpus brains. Recovery actions are deterministic Python, not free-form tool calls — the model picks which one to run, not how to run it.
 
 ---
 
@@ -124,14 +130,23 @@ We're not building the platform first. v1 is OpenClaw recovery, full stop. The p
 Not yet installable. When it is:
 
 ```bash
+# 1. Install Ollama (one-time)
+brew install ollama                    # mac
+# or: curl -fsSL https://ollama.com/install.sh | sh    # linux
+# or: winget install Ollama.Ollama                     # windows
+ollama serve &                         # background runtime
+ollama pull gemma4:e4b                 # ~9.6 GB, one-time
+
+# 2. Install shvix
 npm install -g shvix
-shvix corpus build --topic openclaw   # one-time, builds local brain
+shvix corpus build --topic openclaw    # one-time, builds local brain
 shvix daemon &                         # starts in the background
 ```
 
 Requires:
-- Apple Silicon Mac (MLX)
-- Python 3.11+ with `mlx-lm`
+- Ollama (macOS / Linux / Windows; autodetects Metal / CUDA / ROCm / CPU)
+- ~10 GB disk for the `gemma4:e4b` model; 16 GB RAM recommended (use `gemma4:e2b` on 8 GB)
+- Python 3.10+ (stdlib only — no pip install needed)
 - A claude-mem install with observation history (the corpus needs something to learn from)
 - Node 18+ for the CLI
 
@@ -150,7 +165,7 @@ Requires:
 
 Things still to nail down before this becomes code:
 
-- Which model. Qwen2.5-Coder-7B is the obvious starting point, but a smaller classifier might be enough.
+- Which model long-term. v1 ships `gemma4:e4b` (Ollama). `gemma4:e2b` may be enough for the classify-only task. Worth measuring after we have logs.
 - Corpus refresh cadence. Rebuild on every shvix invocation? Nightly? On-demand?
 - Slash command transport. HTTP on localhost is simplest. Unix socket is cleaner but harder to reach from inside a sandboxed agent.
 - Failure-mode taxonomy. The first runbook library is hand-written — what are the top ~10 ways OpenClaw borks itself?

@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shvix"
 version = "0.1.0"
-description = "Local MLX recovery daemon for shmerminal/openclaw"
+description = "Local recovery daemon for shmerminal/openclaw — cross-platform via Ollama"
 requires-python = ">=3.10"
-dependencies = [
-    "mlx-lm>=0.20",
-]
+# Stdlib-only on purpose. The model runtime is Ollama (external daemon),
+# spoken to over HTTP via urllib. No ML libs, no HTTP libs, no frameworks.
+dependencies = []

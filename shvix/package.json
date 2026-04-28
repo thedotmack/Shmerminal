@@ -1,7 +1,7 @@
 {
   "name": "shvix",
   "version": "0.1.0",
-  "description": "Local MLX recovery agent for shmerminal/openclaw — offline, Apple Silicon",
+  "description": "Local recovery agent for shmerminal/openclaw — offline, cross-platform via Ollama",
   "license": "MIT",
   "type": "module",
   "engines": {

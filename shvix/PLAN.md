@@ -4,7 +4,7 @@ Status: planned, not built. Spec is `shvix/README.md`. This plan finishes v1.
 
 The repo today: only `shvix/README.md` exists. A prior session claimed it created `daemon.ts` (claude-mem obs 74735) but that file did not persist — assume nothing on disk except the README.
 
-v1 scope: a local MLX daemon + four runbooks + a TS CLI + a `/shvix` slash command, integrated with shmerminal session state. No platform abstractions. One corpus: openclaw recovery.
+v1 scope: a local Ollama-backed daemon + four runbooks + a TS CLI + a `/shvix` slash command, integrated with shmerminal session state. No platform abstractions. One corpus: openclaw recovery. Cross-platform (Mac/Linux/Windows) via Ollama; no MLX, no Apple-Silicon-only paths.
 
 ---
 
@@ -12,17 +12,17 @@ v1 scope: a local MLX daemon + four runbooks + a TS CLI + a `/shvix` slash comma
 
 These are the only external/internal contracts v1 depends on. Don't re-derive.
 
-### 0.1 MLX-LM (Python)
+### 0.1 Ollama HTTP API (cross-platform model runtime)
 
-- Package: `mlx-lm`. Imports: `from mlx_lm import load, generate, stream_generate`.
-- Load: `model, tokenizer = load("mlx-community/Qwen2.5-Coder-7B-Instruct-4bit")`. Auto-downloads from HF on first call, caches under HF home.
-- Generate: `generate(model, tokenizer, prompt, max_tokens=..., temp=0.0, top_p=1.0, **kwargs) -> str`. Streaming via `stream_generate(...) -> Generator[GenerationResponse, None, None]`.
-- Chat templates: format prompts with `tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)` then pass to `generate`. Don't hand-format ChatML.
-- Recommended v1 model: `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` (~2.2 GB, 60–80 tok/s M4 Pro). 16 GB unified memory minimum.
-- For load-once-serve-many we *don't* use `mlx_lm.server` — we want our own `/fix`, `/classify`, `/health` shape, not OpenAI chat completions. Pattern: load at daemon startup, hold module-global `model`/`tokenizer`, serve from a single-threaded request loop.
-- Constrained classification (optional, defer to v1.1): `logits_processors=[mask_fn]` to restrict tokens to the runbook-id alphabet. v1 uses prompt-level instruction + post-hoc validation instead.
+- Runtime: **Ollama**. First-party installers for macOS / Linux / Windows; autodetects Metal / CUDA / ROCm / CPU. Model cache under `~/.ollama/models/`.
+- Endpoint: `POST http://localhost:11434/api/generate` with body `{ "model": "gemma4:e4b", "prompt": str, "stream": false, "options": { "temperature": 0, "num_predict": 16 } }` → response `{ "response": str, "done": bool, ... }`.
+- Health probe: `GET http://localhost:11434/api/tags` returns `{ "models": [{ name, size, ... }] }`. shvix daemon uses this on startup to confirm Ollama is reachable AND that `gemma4:e4b` is pulled. If model is missing, fail loudly with the exact `ollama pull gemma4:e4b` command in the error message.
+- Recommended v1 model: **`gemma4:e4b`** (Google Gemma 4 4B-effective Instruct, default `gemma4:latest`). ~9.6 GB on disk, 128K context, multimodal (we only use text), runs comfortably on 16 GB RAM machines. For lower-RAM hosts, `gemma4:e2b` (~7.2 GB, 2.3B effective) is a drop-in via `SHVIX_MODEL=gemma4:e2b`.
+- Classification call shape: build a prompt that lists the candidate runbook ids, instruct the model to reply with exactly one id, set `num_predict: 16` and `temperature: 0`, then post-hoc match against the candidate list (case-insensitive prefix). Fallback to `"unknown"` on no match.
+- Streaming: not needed for v1. `stream: false` keeps the daemon a thin synchronous proxy over `urllib`.
+- Constrained decoding (optional, defer to v1.1): Ollama supports `format: "json"` and JSON Schema constraints. v1 uses prompt-level instruction + post-hoc validation instead.
 
-Anti-patterns: do not invent `model.classify(...)`; do not pass `model="qwen"` shortcut strings — always full HF repo path; do not stream from inside a single-threaded HTTP handler without a queue.
+Anti-patterns: do not embed any Python ML library (no `mlx-lm`, no `transformers`, no `llama-cpp-python`); shvix's daemon must stay stdlib-only. Do not invent shortcut model names — always pass the full Ollama tag (`gemma4:e4b`, not `"gemma"`). Do not bypass Ollama by reaching into `~/.ollama/models/` directly. Do not call `/api/chat` (different shape — stick with `/api/generate` for v1's single-turn classify task).
 
 ### 0.2 claude-mem corpus API
 
@@ -63,43 +63,46 @@ All paths under `~/.shmerminal/sessions/<id>/`. Source of truth: `src/sessions.t
 Tasks:
 1. Create `shvix/package.json` (Node 18+, `"type": "module"`, deps: `node-fetch` not needed — Node 18 has fetch). No bundler. `tsc` to `dist/`. Mirror `shmerm/`'s style.
 2. Create `shvix/tsconfig.json` (strict, ESM, target ES2022, outDir `dist`, rootDir `src`).
-3. Create `shvix/pyproject.toml` with deps `mlx-lm>=0.20`, plus stdlib only otherwise. No FastAPI, no Flask — use `http.server` from stdlib (matches "no frameworks" rule from CLAUDE.md, even though that file is for shmerm — same project ethos).
+3. Create `shvix/pyproject.toml` — **stdlib only**. No runtime deps at all (Ollama is an external daemon, talked to via `urllib.request`). No FastAPI, no Flask — use `http.server` from stdlib. No `mlx-lm`, no `transformers`, no `requests`.
 4. Create dirs: `shvix/src/` (TS), `shvix/py/` (Python daemon + runbooks), `shvix/skill/` (SKILL.md), `shvix/.claude-plugin/` (manifest).
-5. Decide and document on-disk layout: `~/.shvix/{shvix.sock, logs/YYYY-MM-DD.jsonl, model/, corpora/openclaw.json (symlink to claude-mem), config.json}`. **The daemon HTTP port is 7749, configurable via `SHVIX_PORT`.**
+5. Decide and document on-disk layout: `~/.shvix/{daemon.pid, logs/YYYY-MM-DD.jsonl, corpora/openclaw.json (symlink to claude-mem), config.json}`. The model lives in Ollama's cache (`~/.ollama/models/`), not under `~/.shvix/`. **The daemon HTTP port is 7749, configurable via `SHVIX_PORT`.** Ollama URL is `http://localhost:11434`, configurable via `SHVIX_OLLAMA_URL`. Default model `gemma4:e4b`, configurable via `SHVIX_MODEL`.
 
 Verification:
 - `cd shvix && npx tsc --noEmit` succeeds with empty `src/`.
-- `python3 -c "import mlx_lm"` succeeds (or fails loudly with install instructions in README).
+- `curl -s http://localhost:11434/api/tags` returns 200 (or fails loudly with install instructions in README).
 - Tree matches the layout.
 
-Anti-patterns: don't add Express, FastAPI, Pydantic, Click, or any framework. Don't add a build tool (esbuild/vite/tsup). Don't add `requests` — use stdlib `urllib`.
+Anti-patterns: don't add Express, FastAPI, Pydantic, Click, or any framework. Don't add a build tool (esbuild/vite/tsup). Don't add `requests`, `httpx`, or `aiohttp` — use stdlib `urllib`. Don't add `mlx-lm`, `transformers`, `llama-cpp-python`, or any in-process model runtime — Ollama owns the model.
 
 ---
 
-## Phase 2 — Python MLX daemon (HTTP only, no tools yet)
+## Phase 2 — Python daemon (HTTP only, no tools yet)
 
-**Goal:** a long-running Python process that loads the model once and serves three endpoints.
+**Goal:** a long-running Python process that proxies classification requests to Ollama and serves three endpoints. Stdlib only.
 
 File: `shvix/py/daemon.py` (~150 LOC target).
 
 Endpoints:
-- `GET /health` → `{ status: "ok", version, model_loaded: bool, model: str, uptime_s }`.
-- `POST /classify` → body `{ symptom: str, candidates: string[] }` → `{ classification: str, confidence: float, raw: str }`. Uses model for *classification only* — single-token-ish output, temp=0, max_tokens=16, post-hoc match against candidates (case-insensitive prefix), fallback to `"unknown"`.
+- `GET /health` → `{ status: "ok", version, ollama_reachable: bool, model: str, model_pulled: bool, uptime_s }`.
+- `POST /classify` → body `{ symptom: str, candidates: string[] }` → `{ classification: str, confidence: float, raw: str }`. Calls Ollama `/api/generate` with temp=0, num_predict=16, post-hoc match against candidates (case-insensitive prefix), fallback to `"unknown"`.
 - `POST /fix` → stub for phase 4. Return 501 for now.
 
 Implementation pointers (copy-ready locations):
-- Model load pattern: see Phase 0.1. Wrap in try/except, log to stderr, exit 1 if model fails to load (fail-fast per CLAUDE.md).
-- HTTP server: `from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler`. Single global `(model, tokenizer)` initialized before `serve_forever()`. Single-threaded execution of the model: use a `threading.Lock()` around generate calls (MLX is not thread-safe for concurrent generate on one model).
-- Prompt for classify: small system prompt + user template. Keep it < 200 tokens. Persist the exact prompt template in `shvix/py/prompts.py` for testability.
+- Ollama HTTP shape: see Phase 0.1.
+- Startup precondition: `GET {SHVIX_OLLAMA_URL}/api/tags`. If connection refused → fail-fast with stderr message: `"Ollama not running. Install: https://ollama.com/download. Then: ollama serve"`. If reachable but `gemma4:e4b` not in tags list → stderr message: `"Model not pulled. Run: ollama pull gemma4:e4b"`. Exit 1 either way (per CLAUDE.md fail-loudly rule).
+- HTTP server: `from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler`. No model lock needed — Ollama serializes requests on its side. Concurrent classify calls from shvix are fine; Ollama queues them.
+- Outgoing HTTP: `urllib.request.urlopen` with a `urllib.request.Request` carrying JSON body. Set a 60s timeout. Catch `urllib.error.URLError` → return HTTP 503 with `{error: "ollama unreachable"}`.
+- Prompt for classify: small system-style preamble + user template, all in one prompt string (we use `/api/generate`, not `/api/chat`). Keep it < 400 tokens. Persist the exact template in `shvix/py/prompts.py` for testability.
 - Logging: every request appends one JSONL line to `~/.shvix/logs/<YYYY-MM-DD>.jsonl` with `{ts, endpoint, symptom?, classification?, latency_ms, ok}`.
 
 Verification:
-- `python3 shvix/py/daemon.py` starts, prints `shvix daemon listening on :7749, model loaded in Xs` to stderr.
-- `curl localhost:7749/health` returns `model_loaded: true`.
-- `curl -X POST localhost:7749/classify -d '{"symptom":"my session won'"'"'t restart","candidates":["frozen-pty","lockfile-stuck","session-corrupted","port-conflict"]}'` returns one of the four candidates or `"unknown"` in < 5 s.
-- Daemon survives 10 sequential classify calls without leaking memory (RSS stable to ±200 MB).
+- `python3 shvix/py/daemon.py` starts, prints `shvix daemon listening on :7749, ollama=ok, model=gemma4:e4b pulled` to stderr.
+- Without Ollama running: same command prints the install message and exits 1 within 2s.
+- `curl localhost:7749/health` returns `ollama_reachable: true, model_pulled: true`.
+- `curl -X POST localhost:7749/classify -d '{"symptom":"my session won'"'"'t restart","candidates":["frozen-pty","lockfile-stuck","session-corrupted","port-conflict"]}'` returns one of the four candidates or `"unknown"` in < 5 s after first warmup.
+- Daemon survives 10 sequential classify calls without leaking (the daemon itself stays small; Ollama owns model RAM).
 
-Anti-patterns: don't use `mlx_lm.server` (wrong API shape). don't load the model lazily on first request (defeats "stays warm"). don't return free-form generated text from `/classify` — always coerce to a candidate or `"unknown"`. don't shell out to `mlx_lm.generate` CLI — use the Python API.
+Anti-patterns: don't import any ML lib (no `mlx_lm`, no `transformers`, no `llama_cpp`). Don't lazily probe Ollama on first request — fail at startup so the operator sees the error before they're trying to recover something. Don't return free-form generated text from `/classify` — always coerce to a candidate or `"unknown"`. Don't pull models programmatically — print the `ollama pull` command and let the human run it.
 
 ---
 
@@ -275,8 +278,8 @@ Anti-patterns: don't import `shmerm_agent.py` — it's a wrapper around the shme
 5. Grep for anti-patterns:
    - `grep -rn 'rm -rf' shvix/py/` → empty.
    - `grep -rn 'kill.*host_pid\|kill.*meta\.pid' shvix/py/` → empty (we only kill child PIDs).
-   - `grep -rn 'mlx_lm\.server' shvix/py/` → empty.
-   - `grep -rn 'import requests\|from flask\|import express' shvix/` → empty.
+   - `grep -rn 'import mlx_lm\|from mlx_lm\|import transformers\|llama_cpp' shvix/py/` → empty (Ollama owns the model).
+   - `grep -rn 'import requests\|import httpx\|from flask\|import express\|import fastapi' shvix/` → empty.
 6. Manual: install plugin from `.claude-plugin/plugin.json`, fire `/shvix:diagnose terminal stuck` from a real Claude Code session, verify response.
 
 ---
@@ -290,11 +293,11 @@ Anti-patterns: don't import `shmerm_agent.py` — it's a wrapper around the shme
 - Unix-socket transport for the daemon. HTTP localhost is enough for v1; the README's `~/.shvix/shvix.sock` claim is aspirational.
 - Web UI. shvix is invisible — its UI is the slash command.
 - Auto-recovery cron / file watchers. Triggered by human or agent only.
-- Cross-platform support. Apple Silicon only.
+- In-process model runtime (MLX, llama-cpp-python, transformers). v1 is Ollama-only — that's what makes it cross-platform with zero ML deps in our pyproject.
 
 ## Stop conditions (per CLAUDE.md)
 
-- Adding any Python or Node dep beyond `mlx-lm` (Python) and zero (Node) — ask first.
+- Adding ANY Python runtime dep (Python pyproject is stdlib-only) or any Node dep beyond zero — ask first.
 - Anything that writes to `~/.claude-mem/` — ask first.
 - Anything that kills a non-shvix-spawned process other than a shmerminal PTY child — ask first.
 - Touching `src/sessions.ts` or other shmerm core files from shvix — ask first; shvix is a tenant, not an owner.
