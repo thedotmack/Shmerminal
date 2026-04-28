@@ -6,52 +6,100 @@
 
 ---
 
-shmerm makes the tools your agents drive — terminals, browsers, kernels, anything stateful — survive crashes, restarts, agent context resets, and your laptop closing. Wrap any interactive command. Get a session ID. Hand it to an agent. Watch from your phone. Walk away. Come back hours later and pick up exactly where you left off.
+shmerm keeps an interactive program alive in the background and lets you drive it one command at a time — from a script, an agent, or your phone. The program can't tell the difference. Sessions outlive crashes, restarts, agent context resets, and your laptop closing.
 
 ```bash
-shmerm run --tunnel claude code
-# 🔗 view  https://gentle-piano-supplies-fork.trycloudflare.com/view/<token>
-# 💀 kill  https://gentle-piano-supplies-fork.trycloudflare.com/kill/<token>
-# id: crimson-otter-7f3a
+$ shmerm run -- python
+id: dusty-fern-9c1a    url: https://gentle-piano.trycloudflare.com/view/<token>
+
+# turn 1 — load a dataframe
+$ shmerm send dusty-fern-9c1a $'import pandas as pd; df = pd.read_csv("sales.csv")\r'
+$ shmerm wait-idle dusty-fern-9c1a
+
+# turn 2 — query it. (the dataframe is still there.)
+$ shmerm send dusty-fern-9c1a $'df.shape\r'
+$ shmerm wait-idle dusty-fern-9c1a
+$ shmerm tail dusty-fern-9c1a --lines 2
+(48291, 12)
+>>>
 ```
 
-That URL works on your phone. The session keeps running after you close the terminal.
+Same Python process. Four separate shell invocations. Open the URL on your phone to watch it live. The session keeps running after you close every terminal you have.
+
+---
+
+## How it works
+
+Inputs arrive one at a time. Anyone holding the session ID can take the next turn — an agent, a shell script, you on your phone. The PTY doesn't know the difference.
+
+```
+   Time ─────────────────────────────────────────────────────▶
+
+      ┌────────── one long-lived session (PTY alive) ──────────┐
+      │                                                         │
+ agent ─ shmerm send "step 1" ──▶│                              │
+                                  │ ◀── tool prints output ──   │
+ agent ─ shmerm wait-idle ───────▶│ ◀── (5s of quiet) ───       │
+ agent ─ shmerm tail ────────────▶│ ◀── reads scrollback ──     │
+                                  │                              │
+ human ─ web UI: Message agent ──▶│   (lands in inbox)          │
+ agent ─ shmerm inbox ───────────▶│ ◀── sees the message ──     │
+                                  │                              │
+ agent ─ shmerm send "step 2" ──▶│                              │
+                                  │ ◀── more output ──          │
+ human ─ web UI: Type tab ───────▶│   (raw keystrokes)          │
+      └─────────────────────────────────────────────────────────┘
+
+      [ the agent's process can die and respawn anywhere on the X axis ]
+      [ the session keeps running                                       ]
+```
+
+Three properties make it work:
+
+- **Detached.** The session lives in its own host process, owns its own PTY, and outlives whoever started it. Crashes, sleeps, context resets — the tool keeps its place.
+- **Explicit turns.** `shmerm send` is a discrete event, not a typing stream. Agents reason about one move at a time, send it, read what happened. So can humans. The next driver picks up where the last one left off — they just need the session ID.
+- **Idle-aware reads.** `shmerm wait-idle` blocks until the tool has been quiet for N seconds. Better signal than scraping for prompt strings. Robust to slow output. Race-free.
 
 ---
 
 ## Why this exists
 
-Agents do real work through CLIs now. Claude Code, Codex, Aider, Cursor, every coding agent worth using drives a shell. The CLI is the native interface for agent-tool interaction — composable, observable, Unix-shaped, and already understood by the LLMs running them.
+Agents do real work through CLIs now. Claude Code, Codex, Aider, Cursor — every coding agent worth using drives a shell. But the tools agents invoke have state, and CLIs are stateless from the agent's perspective. Every command is fire-and-forget; any state inside a long-running tool dies the moment the agent's context window clears or its process restarts.
 
-But the tools agents invoke have state, and CLIs are stateless from the agent's perspective. Every command is fire-and-forget. Any state inside a long-running tool — a build cache, a debugger session, an open editor, a half-finished refactor — dies the moment the agent's context window clears or its process restarts.
+Three problems shmerm ends:
 
-shmerm closes that gap. Local-first, install-with-npm, no service to operate, no account to create.
+- **Sessions die when the agent's process exits.** Every restart was a cold start. Now the session outlives the agent.
+- **There's no way to watch.** The middle was a black box. Now the live terminal streams to a phone-friendly web UI with a kill button always one tap away.
+- **There's no way to gently steer.** You either Ctrl-C'd and started over, or you didn't intervene at all. Now the human watching from their phone has a separate channel — an inbox the agent reads on its next poll. No keyboard fight.
 
-Three concrete problems it ends:
-
-**Sessions die when the agent's process exits.** Every restart is a cold start. shmerm runs each tool session in a detached host process that outlives whatever spawned it.
-
-**There's no way to watch.** The agent runs. You hope. When it finishes you read the diff. The middle is a black box. shmerm streams the live terminal to a phone-friendly web UI with a kill button.
-
-**There's no way to gently steer.** You either Ctrl-C and start over, or you don't intervene at all. shmerm gives the human watching from their phone a separate channel — an inbox the agent reads on its next poll. No keyboard fight.
-
----
-
-## What you get
-
-**A wrapper.** Your interactive command runs as normal in your terminal. Nothing changes locally.
-
-**A web viewer.** Streams the same bytes to a phone-friendly page. Three tabs at the bottom: Watch, Type, Message agent. The kill button is always one tap away.
-
-**A public tunnel.** Optional `--tunnel` flag spawns a free Cloudflare quick tunnel. cloudflared first, Pinggy SSH fallback. No accounts, no signups.
-
-**Persistent sessions.** Detached host process per session. State at `~/.shmerminal/sessions/<id>/`. The wrapper exiting doesn't kill anything.
-
-**An agent inbox.** A human watching from their phone can send messages to the *agent* (not the PTY). The agent reads them on its next poll. Replies are optional and visible in the UI.
+Local-first. Install with npm. No service to operate, no account to create.
 
 ---
 
 ## The agent loop
+
+The shape is always the same: send, wait for quiet, read, decide, send again.
+
+```
+        ┌────────────────────────────────────────────┐
+        ▼                                            │
+   ┌─────────┐    ┌──────────────┐    ┌──────────┐   │
+   │  send   │──▶ │  wait-idle   │──▶ │   tail   │   │
+   │ (turn)  │    │ (PTY quiet)  │    │ (output) │   │
+   └─────────┘    └──────────────┘    └──────────┘   │
+                                            │        │
+                                            ▼        │
+                                      ┌──────────┐   │
+                                      │  inbox   │   │  any human
+                                      │  check   │   │  message?
+                                      └──────────┘   │
+                                            │        │
+                                            ▼        │
+                                      ┌──────────┐   │
+                                      │  decide  │───┘
+                                      │ next move│
+                                      └──────────┘
+```
 
 Five lines of bash:
 
@@ -67,7 +115,7 @@ while shmerm status $ID --json | jq -e '.status == "running"' > /dev/null; do
 done
 ```
 
-`wait-idle` is the primitive that makes this work. It blocks until the PTY has been quiet for N seconds — a far better signal than scraping stdout for prompt strings.
+`wait-idle` is the primitive that makes this work. It blocks until the PTY has been quiet for N seconds — a far better signal than scraping stdout for prompt strings. The loop above can be killed and restarted by a different process at any iteration; the session doesn't notice.
 
 ---
 
