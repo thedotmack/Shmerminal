@@ -1,12 +1,21 @@
-# Shmerminal
+<div align="center">
 
-**Durable Tool Execution CLI.**
-*The Shtateful Agentic Tool Machine.*
-*terminal shmerminal! we got this.*
+# `shmerm`
+
+**Durable terminal sessions agents and humans share, one turn at a time.**
+
+[![npm](https://img.shields.io/npm/v/shmerm.svg?style=flat-square&color=cb3837)](https://www.npmjs.com/package/shmerm)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![node](https://img.shields.io/badge/node-18%2B-brightgreen.svg?style=flat-square)](#install)
+[![status](https://img.shields.io/badge/status-early-orange.svg?style=flat-square)](#status)
+
+<sub><i>The Shtateful Agentic Tool Machine. terminal shmerminal! we got this.</i></sub>
+
+</div>
 
 ---
 
-shmerm keeps an interactive program alive in the background and lets you drive it one command at a time — from a script, an agent, or your phone. The program can't tell the difference. Sessions outlive crashes, restarts, agent context resets, and your laptop closing.
+## 60 seconds
 
 ```bash
 $ shmerm run -- python
@@ -24,7 +33,8 @@ $ shmerm tail dusty-fern-9c1a --lines 2
 >>>
 ```
 
-Same Python process. Four separate shell invocations. Open the URL on your phone to watch it live. The session keeps running after you close every terminal you have.
+> [!NOTE]
+> Same Python process. Four separate shell invocations. The dataframe survives between commands because the PTY is alive between commands. Open the URL on your phone to watch it live. The session keeps running after every terminal you have is closed.
 
 ---
 
@@ -36,29 +46,45 @@ Inputs arrive one at a time. Anyone holding the session ID can take the next tur
    Time ─────────────────────────────────────────────────────▶
 
       ┌────────── one long-lived session (PTY alive) ──────────┐
-      │                                                         │
- agent ─ shmerm send "step 1" ──▶│                              │
-                                  │ ◀── tool prints output ──   │
- agent ─ shmerm wait-idle ───────▶│ ◀── (5s of quiet) ───       │
- agent ─ shmerm tail ────────────▶│ ◀── reads scrollback ──     │
-                                  │                              │
- human ─ web UI: Message agent ──▶│   (lands in inbox)          │
- agent ─ shmerm inbox ───────────▶│ ◀── sees the message ──     │
-                                  │                              │
- agent ─ shmerm send "step 2" ──▶│                              │
-                                  │ ◀── more output ──          │
- human ─ web UI: Type tab ───────▶│   (raw keystrokes)          │
-      └─────────────────────────────────────────────────────────┘
+      │                                                        │
+ agent ─ shmerm send "step 1" ──▶│                             │
+                                 │ ◀── tool prints output ──   │
+ agent ─ shmerm wait-idle ──────▶│ ◀── (5s of quiet) ───       │
+ agent ─ shmerm tail ───────────▶│ ◀── reads scrollback ──     │
+                                 │                             │
+ human ─ web UI: Message agent ─▶│   (lands in inbox)          │
+ agent ─ shmerm inbox ──────────▶│ ◀── sees the message ──     │
+                                 │                             │
+ agent ─ shmerm send "step 2" ──▶│                             │
+                                 │ ◀── more output ──          │
+ human ─ web UI: Type tab ──────▶│   (raw keystrokes)          │
+      └────────────────────────────────────────────────────────┘
 
       [ the agent's process can die and respawn anywhere on the X axis ]
-      [ the session keeps running                                       ]
+      [ the session keeps running                                      ]
 ```
 
 Three properties make it work:
 
-- **Detached.** The session lives in its own host process, owns its own PTY, and outlives whoever started it. Crashes, sleeps, context resets — the tool keeps its place.
+- **Detached.** The session lives in its own host process, owns its own PTY, outlives whoever started it. Crashes, sleeps, context resets — the tool keeps its place.
 - **Explicit turns.** `shmerm send` is a discrete event, not a typing stream. Agents reason about one move at a time, send it, read what happened. So can humans. The next driver picks up where the last one left off — they just need the session ID.
 - **Idle-aware reads.** `shmerm wait-idle` blocks until the tool has been quiet for N seconds. Better signal than scraping for prompt strings. Robust to slow output. Race-free.
+
+---
+
+## Not a tmux
+
+|                                           | `nohup` | `screen` | `tmux` | `shmerm` |
+| ----------------------------------------- | :-----: | :------: | :----: | :------: |
+| Survives the launching shell exiting      |    ✓    |    ✓     |   ✓    |    ✓     |
+| Live web UI, phone-friendly               |         |          |        |    ✓     |
+| Public HTTPS URL with one flag            |         |          |        |    ✓     |
+| One-shot CLI per turn (no attach required)|         |          |        |    ✓     |
+| `wait-idle` primitive for agents          |         |          |        |    ✓     |
+| Inbox channel separate from the keyboard  |         |          |        |    ✓     |
+
+> [!TIP]
+> tmux is for humans. shmerm is for agents who sometimes hand off to humans.
 
 ---
 
@@ -115,44 +141,21 @@ while shmerm status $ID --json | jq -e '.status == "running"' > /dev/null; do
 done
 ```
 
-`wait-idle` is the primitive that makes this work. It blocks until the PTY has been quiet for N seconds — a far better signal than scraping stdout for prompt strings. The loop above can be killed and restarted by a different process at any iteration; the session doesn't notice.
+The loop above can be killed and restarted by a different process at any iteration. The session doesn't notice.
 
 ---
 
 ## The mobile UI
 
-Three tabs. Not modes you forget you're in; physical tabs you tap.
+Three tabs. Not modes you forget you're in — physical tabs you tap.
 
-| Tab | What it does | Touches PTY? |
-|---|---|---|
-| **Watch** | Read-only stream | No |
-| **Type** | Send keystrokes directly to the terminal | Yes — bypasses agent |
-| **Message agent** | Sends a message to the agent's inbox | No |
+| Tab               | What it does                              | Touches PTY?           |
+| ----------------- | ----------------------------------------- | ---------------------- |
+| **Watch**         | Read-only stream                          | No                     |
+| **Type**          | Send keystrokes directly to the terminal  | Yes — bypasses agent   |
+| **Message agent** | Sends a message to the agent's inbox      | No                     |
 
 Pending messages render grey. When the agent reads them, they turn green. If the agent calls `shmerm reply`, a reply bubble appears underneath. The UI keeps the human aware of whether their interjection actually landed.
-
----
-
-## CLI surface
-
-```
-shmerm run [--tunnel] [--name X] <cmd>...     start a session
-shmerm list                                    active sessions
-shmerm attach <id>                             take over (Ctrl-A D to detach)
-shmerm urls <id>                               reprint URLs
-shmerm send <id> <text>                        write keystrokes to PTY
-shmerm tail <id> [--lines 100]                 read scrollback
-shmerm wait-idle <id> [--quiet 5]              block until PTY quiet
-shmerm status <id>                             json metadata
-shmerm kill <id>
-
-# agent-only inbox commands
-shmerm inbox <id>                              read pending, mark delivered
-shmerm inbox <id> --watch                      long-poll for new messages
-shmerm reply <id> <msg_id> "..."               attach a reply
-```
-
-All commands accept `--json` for machine consumption.
 
 ---
 
@@ -193,15 +196,39 @@ brew install cloudflared          # macOS
 # or apt install cloudflared       # debian/ubuntu
 ```
 
-Requires Node 18+. Works under Bun. PTY support via `node-pty`.
+<sub>Requires Node 18+. Works under Bun. PTY support via <code>node-pty</code>.</sub>
+
+---
+
+<details>
+<summary><b>CLI reference</b> — every command and flag</summary>
+
+```
+shmerm run [--tunnel] [--name X] <cmd>...     start a session
+shmerm list                                    active sessions
+shmerm attach <id>                             take over (Ctrl-A D to detach)
+shmerm urls <id>                               reprint URLs
+shmerm send <id> <text>                        write keystrokes to PTY
+shmerm tail <id> [--lines 100]                 read scrollback
+shmerm wait-idle <id> [--quiet 5]              block until PTY quiet
+shmerm status <id>                             json metadata
+shmerm kill <id>
+
+# agent-only inbox commands
+shmerm inbox <id>                              read pending, mark delivered
+shmerm inbox <id> --watch                      long-poll for new messages
+shmerm reply <id> <msg_id> "..."               attach a reply
+```
+
+All commands accept `--json` for machine consumption.
+
+</details>
 
 ---
 
 ## Status
 
 Early. The substrate works; the surface area is still moving. Issues, ideas, and pull requests welcome.
-
----
 
 ## License
 
