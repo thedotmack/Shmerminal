@@ -16,7 +16,7 @@ from unittest.mock import patch
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from runbooks import _shmerminal as sm  # noqa: E402
+import shmerminal as sm  # noqa: E402
 from runbooks import frozen_pty, lockfile_stuck, port_conflict, session_corrupted  # noqa: E402
 
 

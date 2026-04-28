@@ -13,7 +13,7 @@ import shutil
 import time
 from typing import Optional
 
-from . import _shmerminal as sm
+import shmerminal as sm
 
 
 def _read_text(path: pathlib.Path) -> Optional[str]:

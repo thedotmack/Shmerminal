@@ -9,7 +9,7 @@ from __future__ import annotations
 import subprocess
 from typing import Optional
 
-from . import _shmerminal as sm
+import shmerminal as sm
 
 
 def _lsof_pids_on_port(port: int) -> tuple[bool, list[int]]:

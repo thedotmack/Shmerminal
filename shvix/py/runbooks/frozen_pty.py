@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json, os, signal, socket, time
 from typing import Optional
-from . import _shmerminal as sm
+import shmerminal as sm
 
 WEDGE_THRESHOLD_S = 30.0
 

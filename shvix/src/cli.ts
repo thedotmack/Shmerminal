@@ -250,10 +250,24 @@ async function cmdRecover(args: Args): Promise<number> {
     }
     sessionId = found.id;
   }
-  const payload = {
-    symptom: "auto-recover requested",
-    context: { session_id: sessionId, cwd: process.cwd() },
+  const context: { session_id?: string; cwd: string; logs?: string } = {
+    session_id: sessionId,
+    cwd: process.cwd(),
   };
+  // Phase 8: include the last 200 lines of scrollback when available so the
+  // daemon's corpus retrieval has more signal. Best-effort; never fail the
+  // request if the file is missing or unreadable.
+  if (sessionId) {
+    try {
+      const scrollPath = path.join(SESSIONS_DIR, sessionId, "scrollback.log");
+      const raw = fs.readFileSync(scrollPath, "utf8");
+      const lines = raw.split("\n");
+      context.logs = lines.slice(-200).join("\n");
+    } catch {
+      // file missing or unreadable — omit logs, continue.
+    }
+  }
+  const payload = { symptom: "auto-recover requested", context };
   let r;
   try {
     r = await post(`${DEFAULT_DAEMON_URL}/fix`, payload, 60_000);

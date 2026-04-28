@@ -48,6 +48,8 @@ shvix is three things wired together:
 
 The split matters. The model picks the runbook. Python executes it. A 4B model classifying into a handful of known failure modes is reliable. A 4B model freely calling `rm -rf` is a liability.
 
+shvix never kills shmerminal host processes — only PTY children that wait_idle confirms are wedged. shvix never deletes session directories; only stale `host.sock` files when the host PID is provably dead. Backup files are always created (suffix `*.shvix-bak-<ts>`) before any in-place rewrite of `meta.json` or `inbox.json`.
+
 ---
 
 ## What you get
