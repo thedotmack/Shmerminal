@@ -11,6 +11,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import dispatcher
 import ollama_client
 import prompts
 
@@ -42,6 +43,58 @@ def _classify(symptom: str, candidates: list[str]) -> tuple[str, float, str]:
         if norm.startswith(c.lower()):
             return c, 0.7, raw
     return "unknown", 0.0, raw
+
+
+def _handle_fix(body: dict | None) -> tuple[int, dict, dict]:
+    """Pure /fix logic. Returns (status, response_body, log_payload).
+
+    Extracted from the HTTP handler so unit tests skip the server.
+    """
+    t0 = time.time()
+    if body is None:
+        return 400, {"error": "invalid_json"}, {"ok": False, "error": "invalid_json"}
+    symptom = body.get("symptom")
+    if not isinstance(symptom, str):
+        return 400, {"error": "missing_fields"}, {"ok": False, "error": "missing_fields"}
+    context = body.get("context") or {}
+    if not isinstance(context, dict):
+        context = {}
+    def _ms() -> int:
+        return int((time.time() - t0) * 1000)
+    try:
+        classification, _confidence, _raw = _classify(symptom, dispatcher.candidates())
+    except ollama_client.OllamaUnreachable as e:
+        return 503, {"error": "ollama_unreachable", "detail": str(e)}, {
+            "ok": False, "error": "ollama_unreachable",
+            "symptom": symptom, "latency_ms": _ms(),
+        }
+
+    if classification == "unknown":
+        resp = {"ok": False, "classification": "unknown", "action_taken": "noop",
+                "details": {}, "requires_human": True,
+                "message": "human intervention requested", "latency_ms": _ms()}
+        log = {"ok": False, "classification": "unknown", "action_taken": "noop",
+               "symptom": symptom, "latency_ms": resp["latency_ms"], "requires_human": True}
+        return 200, resp, log
+
+    try:
+        result = dispatcher.dispatch(classification, context)
+    except Exception as e:  # runbook crashed — clean 200 with requires_human
+        resp = {"ok": False, "classification": classification,
+                "action_taken": "runbook_error", "details": {"error": str(e)},
+                "requires_human": True,
+                "message": f"runbook {classification} crashed; see logs",
+                "latency_ms": _ms()}
+        log = {"ok": False, "error": "runbook_exception",
+               "classification": classification, "action_taken": "runbook_error",
+               "symptom": symptom, "latency_ms": resp["latency_ms"], "requires_human": True}
+        return 200, resp, log
+
+    resp = {"classification": classification, **result, "latency_ms": _ms()}
+    log = {"ok": result["ok"], "classification": classification,
+           "action_taken": result["action_taken"], "symptom": symptom,
+           "latency_ms": resp["latency_ms"], "requires_human": result["requires_human"]}
+    return 200, resp, log
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -92,8 +145,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_classify()
             return
         if self.path == "/fix":
-            self._send_json(501, {"error": "not_implemented", "phase": "phase 4"})
-            log_request("/fix", {"ok": False, "error": "not_implemented"})
+            body = self._read_json()
+            status, resp, log = _handle_fix(body)
+            self._send_json(status, resp)
+            log_request("/fix", log)
             return
         self._send_json(404, {"error": "not_found"})
 
