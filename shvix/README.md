@@ -4,7 +4,7 @@
 *The boring one. On purpose.*
 *offline by default — your laptop is the cloud.*
 
-> Status: **draft**. Nothing here is built yet. This is the shape.
+> Status: **v0.1**. Recovery for openclaw on Mac/Linux/Windows, offline. Ollama-backed.
 
 ---
 
@@ -176,7 +176,9 @@ Things still to nail down before this becomes code:
 
 ## Status
 
-Sketch. Reading welcome, code coming.
+v0.1. Daemon, runbooks, CLI, and slash command are wired. The corpus is
+optional — shvix runs cold without it. Apple Silicon / Linux / Windows
+all supported via Ollama.
 
 ---
 
