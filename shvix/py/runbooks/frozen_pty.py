@@ -5,7 +5,11 @@ meta["pid"] (the host process). Asymmetric-control rule per claude-mem obs 74654
 """
 from __future__ import annotations
 
-import json, os, signal, socket, time
+import json
+import os
+import signal
+import socket
+import time
 from typing import Optional
 import shmerminal as sm
 
@@ -38,8 +42,8 @@ def _find_latest_wedged_session() -> Optional[str]:
 
 
 def _send_sock_verb(sock_path: str, verb: dict, timeout: float = 3.0) -> Optional[dict]:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(timeout)
         s.connect(sock_path)
         s.sendall((json.dumps(verb) + "\n").encode("utf-8"))
@@ -49,11 +53,15 @@ def _send_sock_verb(sock_path: str, verb: dict, timeout: float = 3.0) -> Optiona
             if not chunk:
                 break
             buf += chunk
-        s.close()
         line = buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
         return json.loads(line) if line.strip() else None
     except (OSError, json.JSONDecodeError, socket.timeout):
         return None
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
 
 
 def _pid_alive(pid: int) -> bool:

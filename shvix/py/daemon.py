@@ -30,7 +30,8 @@ corpus: corpus_module.Corpus | None = corpus_module.Corpus.load()
 def log_request(endpoint: str, payload: dict) -> None:
     today = time.strftime("%Y-%m-%d")
     line = json.dumps({"ts": time.time(), "endpoint": endpoint, **payload})
-    (LOG_DIR / f"{today}.jsonl").open("a").write(line + "\n")
+    with (LOG_DIR / f"{today}.jsonl").open("a") as f:
+        f.write(line + "\n")
 
 
 def _classify(symptom: str, candidates: list[str]) -> tuple[str, float, str, list[str]]:

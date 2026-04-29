@@ -9,7 +9,9 @@ import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const VERSION = "0.1.0";
-const DEFAULT_DAEMON_URL = process.env.SHVIX_DAEMON_URL ?? "http://localhost:7749";
+const DEFAULT_DAEMON_URL =
+  process.env.SHVIX_DAEMON_URL ??
+  `http://localhost:${process.env.SHVIX_PORT ?? "7749"}`;
 const PYTHON = process.env.SHVIX_PYTHON ?? "python3";
 const SHVIX_HOME = path.join(os.homedir(), ".shvix");
 const PID_FILE = path.join(SHVIX_HOME, "daemon.pid");
@@ -179,7 +181,7 @@ async function cmdDaemonStart(args: Args): Promise<number> {
         if (r.body.ollama_reachable && r.body.model_pulled) {
           out(
             json,
-            `shvix daemon listening on :7749, pid ${child.pid}`,
+            `shvix daemon listening on ${DEFAULT_DAEMON_URL}, pid ${child.pid}`,
             { ok: true, pid: child.pid, url: DEFAULT_DAEMON_URL, health: r.body }
           );
           return 0;

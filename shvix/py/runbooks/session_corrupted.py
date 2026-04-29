@@ -48,6 +48,9 @@ def run(context: dict) -> dict:
     meta_restored = inbox_restored = sock_unlinked = False
 
     # 1) meta.json — backup + minimal replacement if missing/invalid.
+    # A missing meta.json is itself a corruption condition; write a stub so
+    # downstream callers (and the host.sock cleanup below) don't see a
+    # session-dir-without-meta as healthy.
     meta_path = sdir / "meta.json"
     parsed_meta: Optional[dict] = None
     meta_text = _read_text(meta_path)
@@ -65,6 +68,10 @@ def run(context: dict) -> dict:
             parsed_meta = {"id": sid, "status": "exited", "exit_code": -1}
             meta_path.write_text(json.dumps(parsed_meta, indent=2), encoding="utf-8")
             meta_restored = True
+    else:
+        parsed_meta = {"id": sid, "status": "exited", "exit_code": -1}
+        meta_path.write_text(json.dumps(parsed_meta, indent=2), encoding="utf-8")
+        meta_restored = True
 
     # 2) inbox.json — backup + replace with [] if corrupt.
     inbox_path = sdir / "inbox.json"
