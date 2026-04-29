@@ -198,18 +198,20 @@ async function cmdAttach(args: string[]) {
   };
 
   // Forward stdin → PTY; intercept Ctrl-] (0x1d) as detach.
+  // Use base64 so escape sequences and non-ASCII bytes (e.g. arrow keys,
+  // option-key meta sequences, paste with utf-8 input) survive the
+  // JSON-encoded transport without UTF-8 corruption on either side.
   process.stdin.on("data", (chunk: Buffer) => {
     const detachIdx = chunk.indexOf(0x1d);
     if (detachIdx >= 0) {
-      // Forward anything before the detach byte, then leave.
       if (detachIdx > 0) {
-        const before = chunk.subarray(0, detachIdx).toString("binary");
-        sock.write(JSON.stringify({ op: "input", data: before }) + "\n");
+        const before = chunk.subarray(0, detachIdx).toString("base64");
+        sock.write(JSON.stringify({ op: "input", data_b64: before }) + "\n");
       }
       cleanup(0, "\n[detached]\n");
       return;
     }
-    sock.write(JSON.stringify({ op: "input", data: chunk.toString("binary") }) + "\n");
+    sock.write(JSON.stringify({ op: "input", data_b64: chunk.toString("base64") }) + "\n");
   });
 
   // Resize on terminal resize.

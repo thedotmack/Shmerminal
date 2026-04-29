@@ -435,6 +435,14 @@ export async function runHost(id: string, cmd: string, args: string[]) {
   const attached = new Set<net.Socket>();
   const inboxSubs = new Set<net.Socket>();   // sockets in `inbox --watch` mode
 
+  // Best-effort write — swallow EPIPE / ERR_STREAM_DESTROYED instead of
+  // letting them propagate as uncaught synchronous throws. The error
+  // listener registered on each sock keeps the async error path quiet.
+  const safeWrite = (sock: net.Socket, frame: string) => {
+    if (sock.destroyed) return false;
+    try { return sock.write(frame); } catch { return false; }
+  };
+
   // DRY: both the WS path and the unix socket `inbox_notify_new` op need
   // to flush newly-arrived messages to any agent in `inbox --watch` mode.
   async function notifyInboxSubsOfNew() {
@@ -493,16 +501,32 @@ export async function runHost(id: string, cmd: string, args: string[]) {
         const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
         if (!line.trim()) continue;
         let msg: any; try { msg = JSON.parse(line); } catch { continue; }
-        handle(msg, sock).catch((e) => sock.write(JSON.stringify({ type: "error", msg: String(e) }) + "\n"));
+        handle(msg, sock).catch((e) => safeWrite(sock, JSON.stringify({ type: "error", msg: String(e) }) + "\n"));
       }
     });
     sock.on("close", () => { attached.delete(sock); inboxSubs.delete(sock); });
+    // Without an error listener, EPIPE / ECONNRESET on a disconnected
+    // client crashes the host. Swallow — the close handler cleans up.
+    sock.on("error", () => {});
   });
   server.listen(sockOf(id));
 
   async function handle(msg: any, sock: net.Socket) {
     switch (msg.op) {
-      case "input":  return void term.write(msg.data);
+      case "input": {
+        // data_b64 carries raw bytes (preferred — survives non-ASCII
+        // unscathed). data is a utf-8 string for the legacy path
+        // (`shmerm send <id> "echo hi"`). node-pty's write(string) goes
+        // through V8's utf-8 encoder, which corrupts bytes 0x80-0xFF;
+        // for raw bytes we hand it a Buffer instead.
+        if (typeof msg.data_b64 === "string") {
+          const buf = Buffer.from(msg.data_b64, "base64");
+          (term as unknown as { write: (b: Buffer) => void }).write(buf);
+        } else if (typeof msg.data === "string") {
+          term.write(msg.data);
+        }
+        return;
+      }
       case "resize": return void term.resize(Math.max(1, msg.cols|0), Math.max(1, msg.rows|0));
       case "attach": {
         attached.add(sock);
@@ -520,9 +544,12 @@ export async function runHost(id: string, cmd: string, args: string[]) {
         const quiet = msg.quiet_ms ?? 5000;
         const deadline = Date.now() + (msg.timeout_ms ?? 120000);
         const tick = () => {
+          // Bail if the client gave up — the timer can fire after the
+          // socket was destroyed, and writing throws synchronously.
+          if (sock.destroyed) return;
           const idleFor = Date.now() - meta.last_byte_at;
-          if (idleFor >= quiet) sock.write(JSON.stringify({ type: "idle", idle_ms: idleFor }) + "\n");
-          else if (Date.now() > deadline) sock.write(JSON.stringify({ type: "idle", idle_ms: idleFor, timeout: true }) + "\n");
+          if (idleFor >= quiet) safeWrite(sock, JSON.stringify({ type: "idle", idle_ms: idleFor }) + "\n");
+          else if (Date.now() > deadline) safeWrite(sock, JSON.stringify({ type: "idle", idle_ms: idleFor, timeout: true }) + "\n");
           else setTimeout(tick, Math.min(500, quiet - idleFor));
         };
         return void tick();
@@ -642,7 +669,13 @@ export async function call(id: string, op: object, expectFrames = 1): Promise<an
     const sock = net.createConnection(sockOf(id));
     const frames: any[] = [];
     let buf = "";
-    sock.on("connect", () => sock.write(JSON.stringify(op) + "\n"));
+    sock.on("connect", () => {
+      sock.write(JSON.stringify(op) + "\n");
+      // Fire-and-forget ops (input, kill) — server sends nothing back and
+      // doesn't close the socket. Half-close from our side so close
+      // resolves the promise instead of hanging forever.
+      if (expectFrames === 0) sock.end();
+    });
     sock.on("data", (c) => {
       buf += c.toString();
       let i;
