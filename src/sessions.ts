@@ -345,7 +345,12 @@ export async function runHost(id: string, cmd: string, args: string[]) {
   let tunnel: Tunnel | null = null;
 
   const httpServer = http.createServer((req, res) => {
-    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    // Use a fixed base — req.headers.host is attacker-controlled and
+    // a malformed value would throw out of new URL() and crash the
+    // request handler. We only care about the pathname.
+    let url: URL;
+    try { url = new URL(req.url || "/", "http://localhost"); }
+    catch { res.writeHead(400, { "content-type": "text/plain" }); return res.end("bad request"); }
     if (url.pathname === VIEW && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(pageHtml(cmd, STREAM, KILL));
@@ -365,7 +370,9 @@ export async function runHost(id: string, cmd: string, args: string[]) {
 
   const wss = new WebSocketServer({ noServer: true });
   httpServer.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    let url: URL;
+    try { url = new URL(req.url || "/", "http://localhost"); }
+    catch { return socket.destroy(); }
     if (url.pathname !== STREAM) return socket.destroy();
     wss.handleUpgrade(req, socket, head, async (ws) => {
       clients.add(ws);
