@@ -332,11 +332,10 @@ export async function runHost(id: string, cmd: string, args: string[]) {
   await writeMeta(meta);
 
   // ── HTTP + WebSocket server ────────────────────────────────────────────
-  // Bound to 127.0.0.1 — LAN access happens by visiting the lanIp() URL,
-  // which Node accepts because 127.0.0.1 binds the loopback while the
-  // routing tables on macOS forward LAN traffic through the same socket
-  // when the user explicitly types the LAN IP. (If we needed true LAN
-  // exposure we would bind 0.0.0.0; the README says no for now.)
+  // Bound to 0.0.0.0 so the LAN URL is reachable from a phone on the same
+  // wifi. The token in the path is the only access control; that's the
+  // entire point of the shmerm "phone-friendly" model. If the user wants
+  // local-only, they should not advertise the LAN URL or use --tunnel.
   const VIEW = `/view/${meta.token}`;
   const KILL = `/kill/${meta.token}`;
   const STREAM = `/stream/${meta.token}`;
@@ -397,7 +396,7 @@ export async function runHost(id: string, cmd: string, args: string[]) {
 
   // Listen on an ephemeral port and persist it to meta.json so clients
   // (CLI, agent, the human's phone) can find the URL without scraping logs.
-  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", () => resolve()));
+  await new Promise<void>((resolve) => httpServer.listen(0, "0.0.0.0", () => resolve()));
   const addr = httpServer.address();
   meta.port = typeof addr === "object" && addr ? addr.port : 0;
   await writeMeta(meta);
@@ -419,8 +418,10 @@ export async function runHost(id: string, cmd: string, args: string[]) {
   // Boot banner — visible only when running the host in the foreground
   // for debugging. The detached spawn discards stdio.
   process.stderr.write(`shmerm host ${id} listening\n`);
-  process.stderr.write(`  view  http://127.0.0.1:${meta.port}${VIEW}\n`);
-  process.stderr.write(`  kill  http://127.0.0.1:${meta.port}${KILL}\n`);
+  process.stderr.write(`  local  http://127.0.0.1:${meta.port}${VIEW}\n`);
+  const lan = lanIp();
+  if (lan !== "localhost") process.stderr.write(`  lan    http://${lan}:${meta.port}${VIEW}\n`);
+  process.stderr.write(`  kill   http://127.0.0.1:${meta.port}${KILL}\n`);
   if (meta.public_url) process.stderr.write(`  public ${meta.public_url}${VIEW}\n`);
 
   const log = fs.createWriteStream(logOf(id), { flags: "a" });
@@ -462,8 +463,16 @@ export async function runHost(id: string, cmd: string, args: string[]) {
       }
       try { httpServer.close(); } catch {}
       try { tunnel?.close(); } catch {}
-      setTimeout(() => fsp.rm(dir, { recursive: true, force: true }).catch(() => {}), 60 * 60 * 1000);
-      process.exit(0);
+      // Keep the host process alive for an hour after PTY exit so the
+      // session directory is recoverable (logs, inbox), then clean up.
+      // Putting process.exit inside the timer is load-bearing: a bare
+      // process.exit(0) here would kill the timer before it fired, and
+      // session dirs would accumulate forever.
+      setTimeout(() => {
+        fsp.rm(dir, { recursive: true, force: true })
+          .catch(() => {})
+          .finally(() => process.exit(0));
+      }, 60 * 60 * 1000);
     });
   });
 
@@ -536,6 +545,14 @@ export async function runHost(id: string, cmd: string, args: string[]) {
       case "inbox_reply": {
         const m = await inboxAddReply(id, msg.msg_id, msg.text);
         sock.write(JSON.stringify({ type: "inbox_replied", msg: m }) + "\n");
+        // Push the updated msg to any connected browsers so the reply
+        // appears in real time, matching the inbox_send broadcast path.
+        if (m) {
+          const frame = JSON.stringify({ t: "inbox_one", msg: m });
+          for (const ws of clients) {
+            try { if (ws.readyState === ws.OPEN) ws.send(frame); } catch {}
+          }
+        }
         return;
       }
       // called by anything that wants to push-deliver newly-arrived
