@@ -53,10 +53,10 @@ For multi-line input or large pasted blobs, write a heredoc to a temp file and `
 Do not poll `shmerm tail` in a tight loop. Use `wait-idle`:
 
 ```bash
-shmerm wait-idle "$ID" --quiet 5 --timeout 600 --json
+shmerm wait-idle "$ID" --quiet-ms 5000 --timeout-ms 600000 --json
 ```
 
-This blocks until the PTY has emitted no output for 5 seconds, or 600 seconds elapses. The default quiet window is correct for most tools (claude code, aider, builds). Lower it for chatty tools (5 → 2). Raise it for tools that pause then resume (5 → 10).
+This blocks until the PTY has emitted no output for 5 seconds, or 600 seconds elapses. The defaults are correct for most tools (claude code, aider, builds). Lower the quiet window for chatty tools (5000 → 2000). Raise it for tools that pause then resume (5000 → 10000). Both flags are milliseconds.
 
 If the response includes `"timeout": true`, the tool is still working. Either wait again or read scrollback to assess progress.
 
@@ -127,7 +127,7 @@ echo "{\"session_id\": \"$ID\"}" > .shmerm-state.json
 shmerm send "$ID" $'<the user request, escaped>\r'
 
 while shmerm status "$ID" --json | jq -e '.status == "running"' >/dev/null; do
-  shmerm wait-idle "$ID" --quiet 8 --timeout 900
+  shmerm wait-idle "$ID" --quiet-ms 8000 --timeout-ms 900000 --json
 
   # human interjections (highest priority)
   msgs=$(shmerm inbox "$ID" --json)
@@ -146,11 +146,13 @@ done
 ### Sharing the live view with the user
 
 ```bash
-shmerm urls "$ID" --json | jq -r '.public.view'
-# returns: https://gentle-piano-supplies-fork.trycloudflare.com/view/<token>
+PUB=$(shmerm status "$ID" --json | jq -r '.public_url // empty')
+TOK=$(shmerm status "$ID" --json | jq -r '.token')
+[ -n "$PUB" ] && echo "$PUB/view/$TOK"
+# echoes: https://gentle-piano-supplies-fork.trycloudflare.com/view/<token>
 ```
 
-Send that URL through the user's preferred channel (the OpenClaw messaging integration). Do not send the kill URL unless they explicitly asked for a kill switch.
+Send that URL through the user's preferred channel (the OpenClaw messaging integration). Do not send the kill URL unless they explicitly asked for a kill switch. `shmerm urls "$ID"` prints all the URLs (local, lan, public, plus their kill counterparts) to stderr in human-readable form.
 
 ### Recovering from a crash
 
