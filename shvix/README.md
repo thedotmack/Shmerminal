@@ -68,7 +68,7 @@ shvix never kills shmerminal host processes — only PTY children that wait_idle
 
 ## CLI surface
 
-```
+```text
 shvix daemon                          start the local model server
 shvix recover [--last] [--session id] try to fix the most recent bork
 shvix diagnose <symptom>              classify without acting
@@ -84,7 +84,7 @@ All commands accept `--json`. The daemon also speaks HTTP on `localhost` for the
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────┐
 │  ~/.shvix/                                               │
 │    daemon.pid         pid of running shvix daemon         │

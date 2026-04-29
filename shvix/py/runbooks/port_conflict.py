@@ -76,6 +76,11 @@ def run(context: dict) -> dict:
 
     foreign = [p for p in pids if p != host_pid]
     if not foreign:
+        if pids and isinstance(host_pid, int) and host_pid in pids:
+            return {"ok": True, "action_taken": "noop",
+                    "details": {"port": port, "session_id": sid, "host_pid": host_pid},
+                    "requires_human": False,
+                    "message": f"port {port} is bound by session host (pid {host_pid})"}
         return {"ok": True, "action_taken": "noop",
                 "details": {"port": port, "session_id": sid},
                 "requires_human": False, "message": f"port {port} is free"}

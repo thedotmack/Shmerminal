@@ -2,7 +2,7 @@
 
 Runtime state lives under `~/.shvix/` (created on first daemon start):
 
-```
+```text
 ~/.shvix/
   daemon.pid              # pid of running python daemon, written by `shvix daemon`
   logs/

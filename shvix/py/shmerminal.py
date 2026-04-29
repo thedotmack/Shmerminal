@@ -55,14 +55,28 @@ def read_meta(session_id: str) -> Optional[dict]:
 
 
 def read_scrollback_tail(session_id: str, n: int = 200) -> Optional[str]:
-    """Last N lines of scrollback.log, decoded utf-8 with replace, or None."""
+    """Last N lines of scrollback.log, decoded utf-8 with replace, or None.
+
+    Reads backward in 64 KiB chunks so a multi-MB scrollback doesn't pull
+    the whole file into memory just to return its tail.
+    """
     path = session_dir(session_id) / "scrollback.log"
     try:
         with open(path, "rb") as f:
-            data = f.read()
+            f.seek(0, 2)
+            end = f.tell()
+            chunk_size = 64 * 1024
+            buf = b""
+            pos = end
+            # Need n+1 newlines so split(\n)[-n:] preserves exactly n complete lines.
+            while pos > 0 and buf.count(b"\n") <= n:
+                step = min(chunk_size, pos)
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
     except (FileNotFoundError, OSError):
         return None
-    text = data.decode("utf-8", errors="replace")
+    text = buf.decode("utf-8", errors="replace")
     lines = text.split("\n")
     return "\n".join(lines[-n:])
 

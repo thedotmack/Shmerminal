@@ -60,7 +60,8 @@ def run(context: dict) -> dict:
         if held:
             skipped.append({"path": str(p), "reason": "held by live process"})
             continue
-        backup = f"{p}.shvix-bak-{int(now)}"
+        # time_ns avoids same-second collisions when the runbook fires twice in quick succession
+        backup = f"{p}.shvix-bak-{time.time_ns()}"
         os.rename(p, backup)
         backed_up.append({"path": str(p), "backup": backup})
 
