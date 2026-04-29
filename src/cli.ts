@@ -32,7 +32,11 @@ const metaPath = (id: string) => path.join(ROOT, id, "meta.json");
 const sockPath = (id: string) => path.join(ROOT, id, "host.sock");
 
 async function readMeta(id: string): Promise<Meta> {
-  return JSON.parse(await fsp.readFile(metaPath(id), "utf8"));
+  try {
+    return JSON.parse(await fsp.readFile(metaPath(id), "utf8"));
+  } catch (e: any) {
+    throw new Error(`failed to read meta for session ${id}: ${e?.message ?? e}`);
+  }
 }
 
 function die(msg: string, code = 1): never {
