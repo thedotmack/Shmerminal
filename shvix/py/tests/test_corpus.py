@@ -71,9 +71,10 @@ class CorpusSearchTests(unittest.TestCase):
         self.assertEqual(self.corpus.size, 4)
 
     def test_load_missing_path_returns_none(self) -> None:
-        ghost = pathlib.Path("/tmp/shvix-does-not-exist-xyzzy.json")
-        self.assertFalse(ghost.exists())
-        self.assertIsNone(corpus_module.Corpus.load(ghost))
+        with tempfile.TemporaryDirectory() as td:
+            ghost = pathlib.Path(td) / "missing.corpus.json"
+            self.assertFalse(ghost.exists())
+            self.assertIsNone(corpus_module.Corpus.load(ghost))
 
     def test_load_from_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:

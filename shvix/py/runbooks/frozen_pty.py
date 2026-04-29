@@ -82,6 +82,7 @@ def run(context: dict) -> dict:
         return _result(False, "noop", {"session_id": sid}, True,
                        f"meta.json unreadable for session {sid}")
     child_pid = meta.get("child_pid")
+    host_pid = meta.get("pid")
     sock_path = str(sm.host_sock_path(sid))
     resp = _send_sock_verb(sock_path, {"op": "wait_idle", "quiet_ms": 2000, "timeout_ms": 2000}, 3.0)
     if resp is None:
@@ -90,10 +91,21 @@ def run(context: dict) -> dict:
     if not resp.get("timeout"):
         return _result(True, "noop", {"session_id": sid, "idle_ms": resp.get("idle_ms")}, True,
                        f"session is responsive (idle_ms={resp.get('idle_ms')}); not freezing")
-    if not isinstance(child_pid, int) or not _pid_alive(child_pid):
+    # Asymmetric-control rule: only ever signal child_pid, and never let a
+    # corrupt meta.json route us at the host PID or a non-positive value.
+    if (
+        not isinstance(child_pid, int)
+        or child_pid <= 0
+        or (isinstance(host_pid, int) and child_pid == host_pid)
+        or not _pid_alive(child_pid)
+    ):
         return _result(False, "noop", {"session_id": sid, "child_pid": child_pid}, True,
                        "wait_idle timed out but child PID is gone; session may be exiting")
-    os.kill(child_pid, signal.SIGTERM)
+    try:
+        os.kill(child_pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return _result(False, "noop", {"session_id": sid, "child_pid": child_pid}, True,
+                       "child PID no longer signalable; session state changed")
     sig_used = "SIGTERM"
     deadline = time.time() + 3.0
     while time.time() < deadline:
@@ -101,8 +113,20 @@ def run(context: dict) -> dict:
             break
         time.sleep(0.25)
     if _pid_alive(child_pid):
-        os.kill(child_pid, signal.SIGKILL)
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            return _result(False, "noop",
+                           {"session_id": sid, "child_pid": child_pid, "signal": sig_used},
+                           True, "child PID became unsignalable before SIGKILL")
         sig_used = "SIGKILL"
+        # SIGKILL is async from the caller's view; wait briefly so a back-to-back
+        # /fix call doesn't see the same wedged child still alive.
+        kill_deadline = time.time() + 1.0
+        while time.time() < kill_deadline:
+            if not _pid_alive(child_pid):
+                break
+            time.sleep(0.05)
     return _result(True, "killed_child_pty",
                    {"child_pid": child_pid, "signal": sig_used, "session_id": sid},
                    False, f"killed wedged PTY child {child_pid}")

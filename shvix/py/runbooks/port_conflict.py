@@ -6,21 +6,24 @@ the conflicting PID + command and require human action.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 from typing import Optional
 
 import shmerminal as sm
 
+_LSOF_BIN = shutil.which("lsof")
 
-def _lsof_pids_on_port(port: int) -> tuple[bool, list[int]]:
-    """Returns (lsof_available, pids). lsof_available=False -> no lsof on PATH."""
+
+def _lsof_pids_on_port(port: int) -> tuple[str, list[int]]:
+    """Returns (status, pids) where status is "ok" | "missing" | "timeout"."""
+    if not _LSOF_BIN:
+        return ("missing", [])
     try:
-        r = subprocess.run(["lsof", "-nP", "-i", f":{port}", "-t"],
+        r = subprocess.run([_LSOF_BIN, "-nP", "-i", f":{port}", "-t"],
                            capture_output=True, timeout=5, check=False)
-    except FileNotFoundError:
-        return (False, [])
     except subprocess.TimeoutExpired:
-        return (True, [])
+        return ("timeout", [])
     pids: list[int] = []
     for line in r.stdout.decode("utf-8", errors="replace").splitlines():
         line = line.strip()
@@ -30,7 +33,7 @@ def _lsof_pids_on_port(port: int) -> tuple[bool, list[int]]:
             pids.append(int(line))
         except ValueError:
             continue
-    return (True, pids)
+    return ("ok", pids)
 
 
 def _ps_command(pid: int) -> Optional[str]:
@@ -61,11 +64,15 @@ def run(context: dict) -> dict:
                 "details": {"session_id": sid, "port": port},
                 "requires_human": False, "message": "no port assigned to session"}
 
-    available, pids = _lsof_pids_on_port(port)
-    if not available:
+    status, pids = _lsof_pids_on_port(port)
+    if status == "missing":
         return {"ok": False, "action_taken": "noop", "details": {"port": port},
                 "requires_human": True,
                 "message": "lsof not on PATH; cannot inspect port holders"}
+    if status == "timeout":
+        return {"ok": False, "action_taken": "noop", "details": {"port": port},
+                "requires_human": True,
+                "message": f"lsof timed out probing port {port}; cannot determine holders"}
 
     foreign = [p for p in pids if p != host_pid]
     if not foreign:

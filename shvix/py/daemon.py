@@ -61,7 +61,7 @@ def _handle_fix(body: dict | None) -> tuple[int, dict, dict]:
     Extracted from the HTTP handler so unit tests skip the server.
     """
     t0 = time.time()
-    if body is None:
+    if not isinstance(body, dict):
         return 400, {"error": "invalid_json"}, {"ok": False, "error": "invalid_json"}
     symptom = body.get("symptom")
     if not isinstance(symptom, str):
@@ -122,8 +122,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    _MAX_BODY = 1 << 20  # 1 MiB cap on Content-Length to bound local-DoS surface.
+
     def _read_json(self) -> dict | None:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        declared = int(self.headers.get("Content-Length", "0") or "0")
+        length = min(declared, self._MAX_BODY)
         if length <= 0:
             return {}
         try:
@@ -168,13 +171,17 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_classify(self) -> None:
         t0 = time.time()
         body = self._read_json()
-        if body is None:
+        if not isinstance(body, dict):
             self._send_json(400, {"error": "invalid_json"})
             log_request("/classify", {"ok": False, "error": "invalid_json"})
             return
         symptom = body.get("symptom")
         candidates = body.get("candidates")
-        if not isinstance(symptom, str) or not isinstance(candidates, list):
+        if (
+            not isinstance(symptom, str)
+            or not isinstance(candidates, list)
+            or not all(isinstance(c, str) and c for c in candidates)
+        ):
             self._send_json(400, {"error": "missing_fields"})
             log_request("/classify", {"ok": False, "error": "missing_fields"})
             return

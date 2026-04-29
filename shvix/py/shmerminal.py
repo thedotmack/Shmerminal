@@ -15,8 +15,18 @@ from typing import Optional
 SESSIONS_DIR = pathlib.Path(os.path.expanduser("~/.shmerminal/sessions"))
 
 
+def _validate_session_id(session_id: str) -> str:
+    # Reject anything that could escape SESSIONS_DIR via separators or "..".
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("invalid session_id")
+    parts = pathlib.PurePath(session_id).parts
+    if len(parts) != 1 or parts[0] in {".", ".."} or parts[0] != session_id:
+        raise ValueError("invalid session_id")
+    return session_id
+
+
 def session_dir(session_id: str) -> pathlib.Path:
-    return SESSIONS_DIR / session_id
+    return SESSIONS_DIR / _validate_session_id(session_id)
 
 
 def host_sock_path(session_id: str) -> pathlib.Path:

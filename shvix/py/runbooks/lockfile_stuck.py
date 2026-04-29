@@ -7,19 +7,22 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import subprocess
 import time
 
 LOCKFILE_NAMES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb")
 STALE_THRESHOLD_S = 86400  # 24h
+# Resolve lsof to an absolute path once at import to avoid PATH hijack.
+_LSOF_BIN = shutil.which("lsof")
 
 
 def _lsof_holds(path: str) -> tuple[bool, bool]:
     """Returns (lsof_available, path_held). lsof_available=False means no lsof on PATH."""
-    try:
-        r = subprocess.run(["lsof", path], capture_output=True, timeout=5, check=False)
-    except FileNotFoundError:
+    if not _LSOF_BIN:
         return (False, False)
+    try:
+        r = subprocess.run([_LSOF_BIN, path], capture_output=True, timeout=5, check=False)
     except subprocess.TimeoutExpired:
         # Treat timeout as "held" — safer than backing up something in use.
         return (True, True)

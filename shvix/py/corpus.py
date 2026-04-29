@@ -68,9 +68,12 @@ class Corpus:
         except (OSError, ValueError):
             # Unreadable / malformed — graceful degradation, treat as missing.
             return None
+        if not isinstance(data, dict):
+            return None
         observations = data.get("observations") or []
         if not isinstance(observations, list):
             observations = []
+        observations = [o for o in observations if isinstance(o, dict)]
         return cls(observations=observations)
 
     @property
@@ -90,7 +93,7 @@ class Corpus:
         idf: dict[str, float] = {}
         for tok in q_tf:
             df = len(self._postings.get(tok, ()))
-            idf[tok] = math.log(self._n_docs / (1 + df))
+            idf[tok] = math.log((self._n_docs + 1) / (1 + df)) + 1
 
         # Query vector + norm (over query tokens only).
         q_vec = {tok: q_tf[tok] * idf[tok] for tok in q_tf}
@@ -111,7 +114,7 @@ class Corpus:
             for tok, count in tf.items():
                 # Use IDF=log(N/(1+df)) for all doc tokens — recompute on the fly.
                 df = len(self._postings.get(tok, ()))
-                w = count * math.log(self._n_docs / (1 + df))
+                w = count * math.log((self._n_docs + 1) / (1 + df)) + 1
                 d_norm_sq += w * w
             d_norm = math.sqrt(d_norm_sq)
             if d_norm == 0:
@@ -120,7 +123,7 @@ class Corpus:
             for tok, qw in q_vec.items():
                 if tok in tf:
                     df = len(self._postings.get(tok, ()))
-                    dw = tf[tok] * math.log(self._n_docs / (1 + df))
+                    dw = tf[tok] * math.log((self._n_docs + 1) / (1 + df)) + 1
                     dot += qw * dw
             score = dot / (q_norm * d_norm)
             if score > 0:

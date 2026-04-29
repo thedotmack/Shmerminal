@@ -24,6 +24,11 @@ const CORPORA_DIR = path.join(os.homedir(), ".claude-mem", "corpora");
 
 type Args = { positional: string[]; flags: Record<string, string | boolean> };
 
+// Flags that never take a value. Without this set, `--json session frozen`
+// silently swallows "session" as the value of --json, leaving only "frozen"
+// as the symptom for `shvix diagnose`.
+const BOOLEAN_FLAGS = new Set(["json", "last", "tail"]);
+
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -33,6 +38,8 @@ function parseArgs(argv: string[]): Args {
       const eq = a.indexOf("=");
       if (eq !== -1) {
         flags[a.slice(2, eq)] = a.slice(eq + 1);
+      } else if (BOOLEAN_FLAGS.has(a.slice(2))) {
+        flags[a.slice(2)] = true;
       } else {
         const next = argv[i + 1];
         if (next !== undefined && !next.startsWith("--")) {

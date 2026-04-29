@@ -8,15 +8,19 @@ SHVIX_PORT="${SHVIX_PORT:-7749}"
 HEALTH_URL="http://localhost:${SHVIX_PORT}/health"
 CLASSIFY_URL="http://localhost:${SHVIX_PORT}/classify"
 MODEL="${SHVIX_MODEL:-gemma4:e4b}"
+OLLAMA_URL="${SHVIX_OLLAMA_URL:-http://localhost:11434}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-DAEMON_PID=""
+PIDFILE="${HOME}/.shvix/daemon.pid"
 
 log() { printf '[e2e] %s\n' "$*" >&2; }
 
+# Stop the Python daemon via the CLI (which reads the pidfile), not via the
+# launcher PID — the `node ... daemon` process exits as soon as the daemon
+# is healthy, so $! on it goes stale and would leak the real daemon.
 cleanup() {
-  if [ -n "${DAEMON_PID}" ] && kill -0 "${DAEMON_PID}" 2>/dev/null; then
-    log "stopping daemon (pid ${DAEMON_PID})"
-    node "${REPO_ROOT}/shvix/dist/cli.js" daemon stop >/dev/null 2>&1 || kill "${DAEMON_PID}" 2>/dev/null || true
+  if [ -f "${PIDFILE}" ]; then
+    log "stopping daemon"
+    node "${REPO_ROOT}/shvix/dist/cli.js" daemon stop >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -31,18 +35,17 @@ command -v ollama  >/dev/null || { log "ollama not installed; e2e requires Ollam
 log "compiling cli.ts"
 ( cd "${REPO_ROOT}/shvix" && npx tsc )
 
-log "checking ollama reachable"
-curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1 || { log "ollama not running"; exit 77; }
+log "checking ollama reachable at ${OLLAMA_URL}"
+curl -fsS "${OLLAMA_URL}/api/tags" >/dev/null 2>&1 || { log "ollama not running"; exit 77; }
 
 log "checking model ${MODEL} pulled"
-if ! curl -fsS http://localhost:11434/api/tags | jq -e --arg m "${MODEL}" '.models[]?.name | select(. == $m or startswith($m + ":"))' >/dev/null; then
+if ! curl -fsS "${OLLAMA_URL}/api/tags" | jq -e --arg m "${MODEL}" '.models[]?.name | select(. == $m or startswith($m + ":"))' >/dev/null; then
   log "model ${MODEL} not pulled (ollama pull ${MODEL})"
   exit 77
 fi
 
 log "starting daemon"
-node "${REPO_ROOT}/shvix/dist/cli.js" daemon >/dev/null 2>&1 &
-DAEMON_PID=$!
+node "${REPO_ROOT}/shvix/dist/cli.js" daemon >/dev/null 2>&1
 
 log "waiting for /health (up to 60s)"
 for i in $(seq 1 60); do
@@ -68,9 +71,7 @@ esac
 
 log "stopping daemon"
 node "${REPO_ROOT}/shvix/dist/cli.js" daemon stop >/dev/null 2>&1 || true
-DAEMON_PID=""
 
-PIDFILE="${HOME}/.shvix/daemon.pid"
 if [ -f "${PIDFILE}" ]; then log "pid file still present at ${PIDFILE}"; exit 1; fi
 
 elapsed=$(( $(date +%s) - start_ts ))

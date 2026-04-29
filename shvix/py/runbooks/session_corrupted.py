@@ -50,22 +50,30 @@ def run(context: dict) -> dict:
     # 1) meta.json — backup + minimal replacement if missing/invalid.
     # A missing meta.json is itself a corruption condition; write a stub so
     # downstream callers (and the host.sock cleanup below) don't see a
-    # session-dir-without-meta as healthy.
+    # session-dir-without-meta as healthy. Preserve the original "pid" if we
+    # can extract it from the corrupt-but-parseable file so the host.sock
+    # cleanup below can still fire on a dead host.
     meta_path = sdir / "meta.json"
     parsed_meta: Optional[dict] = None
+    salvaged_pid: Optional[int] = None
     meta_text = _read_text(meta_path)
     if meta_text is not None:
         try:
             cand = json.loads(meta_text)
             if isinstance(cand, dict) and isinstance(cand.get("id"), str):
                 parsed_meta = cand
+            elif isinstance(cand, dict) and isinstance(cand.get("pid"), int):
+                salvaged_pid = cand.get("pid")
         except json.JSONDecodeError:
             pass
         if parsed_meta is None:
             backup = meta_path.with_name(f"meta.json.shvix-bak-{ts}")
             shutil.copy2(meta_path, backup)
             backups.append(str(backup))
-            parsed_meta = {"id": sid, "status": "exited", "exit_code": -1}
+            stub: dict = {"id": sid, "status": "exited", "exit_code": -1}
+            if salvaged_pid is not None:
+                stub["pid"] = salvaged_pid
+            parsed_meta = stub
             meta_path.write_text(json.dumps(parsed_meta, indent=2), encoding="utf-8")
             meta_restored = True
     else:
