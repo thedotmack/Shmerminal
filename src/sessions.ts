@@ -376,19 +376,25 @@ export async function runHost(id: string, cmd: string, args: string[]) {
 
       ws.on("message", async (raw) => {
         let m: any; try { m = JSON.parse(raw.toString()); } catch { return; }
-        if (m.t === "i" && typeof m.d === "string") term.write(m.d);
-        else if (m.t === "r") term.resize(Math.max(1, m.cols | 0), Math.max(1, m.rows | 0));
-        else if (m.t === "k") term.kill();
-        else if (m.t === "inbox_sync") {
-          const all = await inboxList(id);
-          ws.send(JSON.stringify({ t: "inbox", msgs: all }));
-        } else if (m.t === "inbox_send" && typeof m.text === "string") {
-          const msg = await inboxAppend(id, { text: m.text, source: "web" });
-          // broadcast the new message to every connected web client
-          const frame = JSON.stringify({ t: "inbox_one", msg });
-          for (const c of clients) if (c.readyState === c.OPEN) c.send(frame);
-          // and push-deliver to any agent watching via the unix socket
-          await notifyInboxSubsOfNew();
+        // Wrap the awaited inbox/file ops so a transient fs failure doesn't
+        // bubble up as an unhandled promise rejection and crash the host.
+        try {
+          if (m.t === "i" && typeof m.d === "string") term.write(m.d);
+          else if (m.t === "r") term.resize(Math.max(1, m.cols | 0), Math.max(1, m.rows | 0));
+          else if (m.t === "k") term.kill();
+          else if (m.t === "inbox_sync") {
+            const all = await inboxList(id);
+            ws.send(JSON.stringify({ t: "inbox", msgs: all }));
+          } else if (m.t === "inbox_send" && typeof m.text === "string") {
+            const msg = await inboxAppend(id, { text: m.text, source: "web" });
+            // broadcast the new message to every connected web client
+            const frame = JSON.stringify({ t: "inbox_one", msg });
+            for (const c of clients) if (c.readyState === c.OPEN) c.send(frame);
+            // and push-deliver to any agent watching via the unix socket
+            await notifyInboxSubsOfNew();
+          }
+        } catch (e) {
+          process.stderr.write(`ws message handler error: ${(e as any)?.message ?? e}\n`);
         }
       });
       ws.on("close", () => clients.delete(ws));
