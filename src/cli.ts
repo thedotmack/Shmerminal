@@ -60,6 +60,14 @@ function takeOpt(args: string[], name: string): string | undefined {
   args.splice(i, 2);
   return v;
 }
+function parsePositiveInt(raw: string | undefined, name: string, fallback: number, max: number): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > max) {
+    die(`${name} must be a positive integer in [1, ${max}], got "${raw}"`);
+  }
+  return n;
+}
 
 function relTime(ms: number): string {
   const d = Date.now() - ms;
@@ -258,7 +266,7 @@ async function cmdTail(args: string[]) {
   const linesOpt = takeOpt(args, "--lines");
   const id = args[0];
   if (!id) die("usage: shmerm tail <id> [--lines N]");
-  const lines = linesOpt ? parseInt(linesOpt, 10) : 100;
+  const lines = parsePositiveInt(linesOpt, "--lines", 100, 100_000);
   const data = await tailScrollback(id, lines);
   process.stdout.write(data);
 }
@@ -266,14 +274,20 @@ async function cmdTail(args: string[]) {
 // ── wait-idle ────────────────────────────────────────────────────────────
 
 async function cmdWaitIdle(args: string[]) {
+  const json = takeFlag(args, "--json");
   const quietOpt = takeOpt(args, "--quiet-ms");
   const timeoutOpt = takeOpt(args, "--timeout-ms");
   const id = args[0];
-  if (!id) die("usage: shmerm wait-idle <id> [--quiet-ms N] [--timeout-ms N]");
-  const quiet = quietOpt ? parseInt(quietOpt, 10) : 5000;
-  const timeout = timeoutOpt ? parseInt(timeoutOpt, 10) : 120000;
+  if (!id) die("usage: shmerm wait-idle <id> [--quiet-ms N] [--timeout-ms N] [--json]");
+  const quiet = parsePositiveInt(quietOpt, "--quiet-ms", 5000, 24 * 3600_000);
+  const timeout = parsePositiveInt(timeoutOpt, "--timeout-ms", 120_000, 24 * 3600_000);
   const frame = await waitIdle(id, quiet, timeout);
-  process.stdout.write(JSON.stringify(frame) + "\n");
+  if (json) {
+    process.stdout.write(JSON.stringify(frame) + "\n");
+  } else {
+    const status = frame?.timeout ? "timeout" : "idle";
+    process.stderr.write(`${status} (idle_ms=${frame?.idle_ms ?? "?"})\n`);
+  }
   if (frame?.timeout) process.exit(1);
 }
 

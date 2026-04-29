@@ -72,6 +72,26 @@ const logOf  = (id: string) => path.join(dirOf(id), "scrollback.log");
 const inboxOf = (id: string) => path.join(dirOf(id), "inbox.json");
 
 // ── inbox helpers ────────────────────────────────────────────────────────
+//
+// Mutations to inbox.json are read-modify-write. Without serialization,
+// concurrent inbox_send / inbox_read / inbox_reply calls can clobber
+// each other (last-writer-wins, dropped messages or replies). The lock
+// is per-session and in-process, which is sufficient because every
+// host owns exactly one inbox.json.
+const inboxLocks = new Map<string, Promise<unknown>>();
+async function withInboxLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = inboxLocks.get(id) ?? Promise.resolve();
+  // Chain `fn` after the previous holder regardless of how it settled, so
+  // an error in one mutation doesn't poison subsequent ones.
+  const next = prev.then(fn, fn);
+  // Track the chain head as a rejection-swallowing wrapper so an
+  // unhandled rejection here can't bubble up.
+  const tracked = next.catch(() => {});
+  inboxLocks.set(id, tracked);
+  try { return await next; }
+  finally { if (inboxLocks.get(id) === tracked) inboxLocks.delete(id); }
+}
+
 export async function inboxList(id: string): Promise<InboxMsg[]> {
   try { return JSON.parse(await fsp.readFile(inboxOf(id), "utf8")); }
   catch { return []; }
@@ -81,35 +101,41 @@ async function inboxWrite(id: string, msgs: InboxMsg[]) {
   await fsp.writeFile(inboxOf(id), JSON.stringify(msgs, null, 2));
 }
 export async function inboxAppend(id: string, m: { text: string; source: "web" | "cli" }): Promise<InboxMsg> {
-  const msgs = await inboxList(id);
-  const msg: InboxMsg = { id: crypto.randomBytes(4).toString("hex"), ts: Date.now(), ...m };
-  msgs.push(msg);
-  await inboxWrite(id, msgs);
-  return msg;
+  return withInboxLock(id, async () => {
+    const msgs = await inboxList(id);
+    const msg: InboxMsg = { id: crypto.randomBytes(4).toString("hex"), ts: Date.now(), ...m };
+    msgs.push(msg);
+    await inboxWrite(id, msgs);
+    return msg;
+  });
 }
 export async function inboxMarkDelivered(id: string, msgIds?: string[]): Promise<InboxMsg[]> {
-  const msgs = await inboxList(id);
-  const target = msgIds ? new Set(msgIds) : null;
-  const now = Date.now();
-  const touched: InboxMsg[] = [];
-  for (const m of msgs) {
-    if (m.delivered_at) continue;
-    if (target && !target.has(m.id)) continue;
-    m.delivered_at = now;
-    touched.push(m);
-  }
-  await inboxWrite(id, msgs);
-  return touched;
+  return withInboxLock(id, async () => {
+    const msgs = await inboxList(id);
+    const target = msgIds ? new Set(msgIds) : null;
+    const now = Date.now();
+    const touched: InboxMsg[] = [];
+    for (const m of msgs) {
+      if (m.delivered_at) continue;
+      if (target && !target.has(m.id)) continue;
+      m.delivered_at = now;
+      touched.push(m);
+    }
+    await inboxWrite(id, msgs);
+    return touched;
+  });
 }
 export async function inboxAddReply(id: string, msgId: string, reply: string): Promise<InboxMsg | null> {
-  const msgs = await inboxList(id);
-  const m = msgs.find(x => x.id === msgId);
-  if (!m) return null;
-  m.reply = reply;
-  m.reply_ts = Date.now();
-  if (!m.delivered_at) m.delivered_at = m.reply_ts;
-  await inboxWrite(id, msgs);
-  return m;
+  return withInboxLock(id, async () => {
+    const msgs = await inboxList(id);
+    const m = msgs.find(x => x.id === msgId);
+    if (!m) return null;
+    m.reply = reply;
+    m.reply_ts = Date.now();
+    if (!m.delivered_at) m.delivered_at = m.reply_ts;
+    await inboxWrite(id, msgs);
+    return m;
+  });
 }
 
 // ── LAN IP helper ────────────────────────────────────────────────────────
@@ -396,7 +422,7 @@ export async function runHost(id: string, cmd: string, args: string[]) {
             const msg = await inboxAppend(id, { text: m.text, source: "web" });
             // broadcast the new message to every connected web client
             const frame = JSON.stringify({ t: "inbox_one", msg });
-            for (const c of clients) if (c.readyState === c.OPEN) c.send(frame);
+            for (const c of clients) if (c.readyState === WebSocket.OPEN) c.send(frame);
             // and push-deliver to any agent watching via the unix socket
             await notifyInboxSubsOfNew();
           }
@@ -469,7 +495,7 @@ export async function runHost(id: string, cmd: string, args: string[]) {
     for (const s of attached) s.write(frame);
     // also fan out to any browser watching via WS
     const wsFrame = JSON.stringify({ t: "d", d: data });
-    for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(wsFrame);
+    for (const ws of clients) if (ws.readyState === WebSocket.OPEN) ws.send(wsFrame);
   });
 
   term.onExit(({ exitCode }) => {
@@ -481,7 +507,7 @@ export async function runHost(id: string, cmd: string, args: string[]) {
       // tunnel before exiting so resources don't linger.
       const wsExit = JSON.stringify({ t: "x", c: exitCode ?? 0 });
       for (const ws of clients) {
-        try { if (ws.readyState === ws.OPEN) ws.send(wsExit); ws.close(); } catch {}
+        try { if (ws.readyState === WebSocket.OPEN) ws.send(wsExit); ws.close(); } catch {}
       }
       try { httpServer.close(); } catch {}
       try { tunnel?.close(); } catch {}
@@ -591,7 +617,7 @@ export async function runHost(id: string, cmd: string, args: string[]) {
         if (m) {
           const frame = JSON.stringify({ t: "inbox_one", msg: m });
           for (const ws of clients) {
-            try { if (ws.readyState === ws.OPEN) ws.send(frame); } catch {}
+            try { if (ws.readyState === WebSocket.OPEN) ws.send(frame); } catch {}
           }
         }
         return;
