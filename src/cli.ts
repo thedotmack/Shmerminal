@@ -117,6 +117,9 @@ async function cmdRun(args: string[]) {
   process.stderr.write(`shmerm session ${meta.id}\n`);
   process.stderr.write(`  view  ${localView}\n`);
   if (lan !== "localhost") process.stderr.write(`  lan   ${lanView}\n`);
+  if (tunnel && !meta.public_url) {
+    process.stderr.write(`  (tunnel requested but no public URL — start cloudflared/ssh and retry)\n`);
+  }
   process.stderr.write(`  kill  ${localKill}\n`);
   if (meta.public_url) process.stderr.write(`  public ${meta.public_url}/view/${meta.token}\n`);
 }

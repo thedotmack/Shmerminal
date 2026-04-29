@@ -602,17 +602,32 @@ export async function startSession(cmd: string, args: string[]): Promise<Meta> {
   });
   child.unref();
   // Wait for the host to bind its HTTP port before returning. The host
-  // writes meta.json twice: once with port=0 immediately after spawn,
-  // then again with the real port after listen() resolves. Returning
-  // before that second write would hand callers a useless :0 URL.
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
+  // writes meta.json multiple times: once with port=0 immediately after
+  // spawn, again with the real port after listen() resolves, and a
+  // third time with public_url after the tunnel comes up. Returning
+  // before those writes hands callers a useless :0 URL or a Meta with
+  // no public_url even though --tunnel was requested.
+  const wantTunnel = process.env.SHMERM_TUNNEL === "1";
+  const portDeadline = Date.now() + 5_000;
+  // Tunnels can take 5-15s to come up; wait longer when one is requested.
+  const tunnelDeadline = Date.now() + 20_000;
+  let lastMeta: Meta | undefined;
+  while (Date.now() < tunnelDeadline) {
     try {
       const m = await readMeta(id);
-      if (m.port > 0) return m;
+      lastMeta = m;
+      if (m.port > 0) {
+        if (!wantTunnel) return m;
+        if (m.public_url) return m;
+        // Tunnel was requested but hasn't reported yet. Keep waiting,
+        // unless the host already exited (e.g. tunnel hard-failed).
+        if (m.status === "exited") return m;
+      }
     } catch {}
+    if (Date.now() > portDeadline && (!wantTunnel || !lastMeta || lastMeta.port === 0)) break;
     await sleep(50);
   }
+  if (lastMeta && lastMeta.port > 0) return lastMeta; // tunnel never came up — caller can warn
   throw new Error(`session ${id} failed to start`);
 }
 
