@@ -69,35 +69,32 @@ function relTime(ms: number): string {
 // ── run ──────────────────────────────────────────────────────────────────
 
 async function cmdRun(args: string[]) {
-  const tunnel = takeFlag(args, "--tunnel");
-  const json = takeFlag(args, "--json");
+  // Split on `--` BEFORE flag parsing so flags meant for the wrapped command
+  // aren't eaten by takeFlag. e.g. `shmerm run -- bash --tunnel` should
+  // pass `--tunnel` to bash, not toggle our tunnel flag.
+  const dashIdx = args.indexOf("--");
+  const cliArgs = dashIdx >= 0 ? args.slice(0, dashIdx) : args;
+  const childArgs = dashIdx >= 0 ? args.slice(dashIdx + 1) : [];
 
-  // Anything after `--` is cmd+args. If `--` is missing, the first
-  // non-flag arg is the command.
+  const tunnel = takeFlag(cliArgs, "--tunnel");
+  const json = takeFlag(cliArgs, "--json");
+
   let cmd: string | undefined;
   let cmdArgs: string[] = [];
-  const dashIdx = args.indexOf("--");
   if (dashIdx >= 0) {
-    cmd = args[dashIdx + 1];
-    cmdArgs = args.slice(dashIdx + 2);
+    cmd = childArgs[0];
+    cmdArgs = childArgs.slice(1);
   } else {
-    cmd = args[0];
-    cmdArgs = args.slice(1);
+    cmd = cliArgs[0];
+    cmdArgs = cliArgs.slice(1);
   }
   if (!cmd) die("usage: shmerm run [--tunnel] [--json] -- <cmd> [args...]");
 
   if (tunnel) process.env.SHMERM_TUNNEL = "1";
 
-  let meta = await startSession(cmd, cmdArgs);
-
-  // startSession returns the initial meta with port=0. Poll until the host
-  // has bound an ephemeral port and re-persisted meta.json.
-  const deadline = Date.now() + 5000;
-  while (meta.port === 0 && Date.now() < deadline) {
-    await sleep(100);
-    try { meta = await readMeta(meta.id); } catch {}
-  }
-  if (meta.port === 0) die(`session ${meta.id} started but never reported a port`);
+  // startSession blocks until the host has bound its HTTP port, so meta
+  // already has a real port and (when --tunnel) a public_url.
+  const meta = await startSession(cmd, cmdArgs);
 
   const lan = lanIp();
   const localView = `http://127.0.0.1:${meta.port}/view/${meta.token}`;

@@ -130,6 +130,7 @@ export function lanIp(): string {
 function pageHtml(cmd: string, streamPath: string, killPath: string): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>shmerm — ${cmd}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
 <style>
@@ -600,9 +601,17 @@ export async function startSession(cmd: string, args: string[]): Promise<Meta> {
     detached: true, stdio: "ignore", cwd: process.cwd(), env: process.env,
   });
   child.unref();
-  const deadline = Date.now() + 3000;
+  // Wait for the host to bind its HTTP port before returning. The host
+  // writes meta.json twice: once with port=0 immediately after spawn,
+  // then again with the real port after listen() resolves. Returning
+  // before that second write would hand callers a useless :0 URL.
+  const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    try { return await readMeta(id); } catch { await sleep(50); }
+    try {
+      const m = await readMeta(id);
+      if (m.port > 0) return m;
+    } catch {}
+    await sleep(50);
   }
   throw new Error(`session ${id} failed to start`);
 }
