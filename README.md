@@ -130,12 +130,12 @@ The shape is always the same: send, wait for quiet, read, decide, send again.
 Five lines of bash:
 
 ```bash
-ID=$(shmerm run --tunnel --json claude code | jq -r .id)
-shmerm send  $ID $'refactor src/auth.ts to use the sessions module\r'
+ID=$(shmerm run --tunnel --json -- claude code | jq -r .id)
+shmerm send $ID 'refactor src/auth.ts to use the sessions module' --enter
 
 while shmerm status $ID --json | jq -e '.status == "running"' > /dev/null; do
-  shmerm wait-idle $ID --quiet 5 --timeout 600
-  msgs=$(shmerm inbox $ID)               # any human interjections?
+  shmerm wait-idle $ID --quiet-ms 5000 --timeout-ms 600000 --json
+  msgs=$(shmerm inbox $ID --json)        # any human interjections?
   [ "$msgs" != "[]" ] && handle "$msgs"
   decide_next_action_and_send $ID
 done
@@ -204,23 +204,27 @@ brew install cloudflared          # macOS
 <summary><b>CLI reference</b> — every command and flag</summary>
 
 ```
-shmerm run [--tunnel] [--name X] <cmd>...     start a session
-shmerm list                                    active sessions
-shmerm attach <id>                             take over (Ctrl-A D to detach)
-shmerm urls <id>                               reprint URLs
-shmerm send <id> <text>                        write keystrokes to PTY
-shmerm tail <id> [--lines 100]                 read scrollback
-shmerm wait-idle <id> [--quiet 5]              block until PTY quiet
-shmerm status <id>                             json metadata
+shmerm run [--tunnel] [--json] -- <cmd> [args...]    start a session
+shmerm list [--json]                                  active sessions
+shmerm attach <id>                                    take over (Ctrl-] to detach)
+shmerm urls <id>                                      reprint URLs
+shmerm send <id> <text> [--enter]                     write text to PTY
+shmerm tail <id> [--lines 100]                        read scrollback
+shmerm wait-idle <id> [--quiet-ms 5000]               block until PTY quiet
+                       [--timeout-ms 120000]
+                       [--json]
+shmerm status <id> [--json]                           session metadata
 shmerm kill <id>
 
 # agent-only inbox commands
-shmerm inbox <id>                              read pending, mark delivered
-shmerm inbox <id> --watch                      long-poll for new messages
-shmerm reply <id> <msg_id> "..."               attach a reply
+shmerm inbox <id> [--json]                            read pending, mark delivered
+shmerm inbox <id> --watch [--json]                    long-poll for new messages
+shmerm reply <id> <msg_id> "..."                      attach a reply
 ```
 
-All commands accept `--json` for machine consumption.
+`run`, `list`, `status`, `inbox`, and `wait-idle` accept `--json` for machine
+consumption. The rest write human-readable lines to stderr; only `attach`,
+`tail`, and JSON modes write to stdout.
 
 </details>
 
